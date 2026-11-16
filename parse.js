@@ -2302,7 +2302,7 @@ function scanInline(s, refs) {
         canClose = fi.rightFlank;
       }
       flushText();
-      nodes.push({ t: 'delim', ch: c, len: run, canOpen, canClose });
+      nodes.push({ t: 'delim', ch: c, len: run, canOpen, canClose, before: fi.before, after: fi.after });
       i += run;
       continue;
     }
@@ -2453,14 +2453,183 @@ function scanInline(s, refs) {
   return nodes;
 }
 
-// Resolve emphasis / strong / strikethrough in a flat node list.
-// Mutates `nodes` in place.
+// Boundary char codes for inline nodes (for flanking recomputation
+// after an emphasis match changes a node's neighbours).
+function nodeFirstChar(nd) {
+  switch (nd.t) {
+    case 'text': case 'entity': return nd.s.length ? nd.s.charCodeAt(0) : -1;
+    case 'delim': return nd.ch;
+    case 'code': return 96;
+    case 'link': return 91;
+    case 'image': return 33;
+    case 'em': case 'strong': return nd.ch !== undefined ? nd.ch : 42;
+    case 'del': return 126;
+    case 'autolink': return 60;
+    case 'html': return nd.s.length ? nd.s.charCodeAt(0) : -1;
+    case 'br': return 10;
+    default: return -1;
+  }
+}
+function nodeLastChar(nd) {
+  switch (nd.t) {
+    case 'text': case 'entity': return nd.s.length ? nd.s.charCodeAt(nd.s.length - 1) : -1;
+    case 'delim': return nd.ch;
+    case 'code': return 96;
+    case 'link': case 'image': return 41;
+    case 'em': case 'strong': return nd.ch !== undefined ? nd.ch : 42;
+    case 'del': return 126;
+    case 'autolink': return 62;
+    case 'html': return nd.s.length ? nd.s.charCodeAt(nd.s.length - 1) : -1;
+    case 'br': return 10;
+    default: return -1;
+  }
+}
+// Set a delim node's flanking from explicit before/after char codes.
+function setFlank(nd, before, after) {
+  const beforeWS = before < 0 ? true : isWSCode(before);
+  const afterWS = after < 0 ? true : isWSCode(after);
+  const beforePunct = before < 0 ? false : isPunctCode(before);
+  const afterPunct = after < 0 ? false : isPunctCode(after);
+  const leftFlank = !afterWS && (!afterPunct || beforeWS || beforePunct);
+  const rightFlank = !beforeWS && (!beforePunct || afterWS || afterPunct);
+  if (nd.ch === 95) {
+    nd.canOpen = leftFlank && (!rightFlank || (before >= 0 && isPunctCode(before)));
+    nd.canClose = rightFlank && (!leftFlank || (after >= 0 && isPunctCode(after)));
+  } else {
+    nd.canOpen = leftFlank;
+    nd.canClose = rightFlank;
+  }
+  nd.before = before;
+  nd.after = after;
+}
+// Recompute canOpen/canClose (and before/after) for delim nodes in
+// `nodes` from their neighbours in the list; the list is bounded by
+// beforeChar/afterChar (-1 = string boundary, counts as whitespace).
+function recomputeFlanks(nodes, beforeChar, afterChar) {
+  for (let i = 0; i < nodes.length; i++) {
+    const nd = nodes[i];
+    if (nd.t !== 'delim') continue;
+    const before = i === 0 ? beforeChar : nodeLastChar(nodes[i - 1]);
+    const after = i === nodes.length - 1 ? afterChar : nodeFirstChar(nodes[i + 1]);
+    setFlank(nd, before, after);
+  }
+}
+
+// Resolve emphasis / strong in a flat node list, following marked's
+// opener-driven emStrong (not a delimiter stack): for each opener,
+// scan forward for a closer. A pure-opener run adds its length to
+// the length still needed (m); a run that can both open and close is
+// skipped under the odd-match rule (y%3 && (y+b)%3==0, accumulating
+// f); a pure closer is subject to the same skip only when R holds.
+// Leftover opener delimiters land inside the em/strong node, and a
+// partially used closer leaves its unused tail after it. The inner
+// nodes are resolved recursively. Mutates `nodes` in place.
 function resolveEmphasis(nodes) {
+  let i = 0;
+  while (i < nodes.length) {
+    const nd = nodes[i];
+    if (nd.t !== 'delim' || (nd.ch !== 42 && nd.ch !== 95) || nd.len <= 0 || !nd.canOpen) { i++; continue; }
+    const r = nd.ch;
+    const k = nd.len;
+    const y = nd.len;
+    const p = nd.before !== undefined ? nd.before : -1;
+    const afterCh = nd.after !== undefined ? nd.after : -1;
+    const d = afterCh >= 0 && isPunctCode(afterCh);
+    const h = p === 42 || p === 95 || (p >= 0 && isPunctCode(p));
+    const R = p >= 0 && !isWSCode(p) && (d || (r === 42 && !h));
+    const o = p === r;
+    // marked's RDelim first alternative is `^`-anchored, so its span
+    // skip (`__...*...__` for `*`, `**..._...**` for `_`) can only
+    // fire once, at the very start of the search: the first other-
+    // char run (len>=2), then a same-char run, then an other-char
+    // run (len>=2), with no other delimiter in between. That
+    // same-char run is hidden; nothing later in the search is.
+    const otherCh = r === 42 ? 95 : 42;
+    const dIdx = [];
+    for (let q = i + 1; q < nodes.length; q++) {
+      if (nodes[q].t === 'delim' && nodes[q].len > 0) dIdx.push(q);
+    }
+    const hidden = new Set();
+    if (dIdx.length >= 3 &&
+        nodes[dIdx[0]].ch === otherCh && nodes[dIdx[0]].len >= 2 &&
+        nodes[dIdx[1]].ch === r &&
+        nodes[dIdx[2]].ch === otherCh && nodes[dIdx[2]].len >= 2) {
+      hidden.add(dIdx[1]);
+    }
+    let m = k, f = 0;
+    let found = -1, foundB = 0, foundBPrime = 0, foundUse = 0;
+    for (let j = i + 1; j < nodes.length; j++) {
+      const cnd = nodes[j];
+      if (cnd.t !== 'delim' || cnd.ch !== r || cnd.len <= 0) continue;
+      if (!cnd.canOpen && !cnd.canClose) continue;
+      if (hidden.has(j)) continue;
+      const b = cnd.len;
+      const pureOpener = cnd.canOpen && !cnd.canClose;
+      const both = cnd.canOpen && cnd.canClose;
+      if (pureOpener) { m += b; continue; }
+      if (both || R) {
+        if (o && both) break;
+        if (y % 3 !== 0 && (y + b) % 3 === 0) { f += b; continue; }
+      }
+      m -= b;
+      if (m > 0) continue;
+      const bPrime = Math.min(b, b + m + f);
+      const use = (Math.min(k, bPrime) % 2 === 1) ? 1 : 2;
+      found = j; foundB = b; foundBPrime = bPrime; foundUse = use;
+      break;
+    }
+    if (found < 0) {
+      if (nd.len > 1) {
+        // marked retries from the next character of the run: the first
+        // delimiter becomes literal text and the shortened run is
+        // tried again as an opener (its `before` is now the delimiter
+        // itself, so `o` is true for the retry)
+        nodes.splice(i, 0, { t: 'text', s: String.fromCharCode(r) });
+        nd.len -= 1;
+        setFlank(nd, r, nd.after);
+        i++;
+        continue;
+      }
+      i++;
+      continue;
+    }
+    const cnode = nodes[found];
+    const type = foundUse === 2 ? 'strong' : 'em';
+    const children = nodes.slice(i + 1, found);
+    if (k - foundUse > 0) children.unshift({ t: 'delim', ch: r, len: k - foundUse, canOpen: false, canClose: false, before: r, after: -1 });
+    if (foundBPrime - foundUse > 0) children.push({ t: 'delim', ch: r, len: foundBPrime - foundUse, canOpen: false, canClose: false, before: -1, after: r });
+    recomputeFlanks(children, r, r);
+    resolveEmphasis(children);
+    const newNode = { t: type, ch: r, children };
+    const before = nodes.slice(0, i);
+    const afterNodes = nodes.slice(found + 1);
+    const mid = [newNode];
+    const leftover = foundB - foundBPrime;
+    if (leftover > 0) {
+      const leftNode = { t: 'delim', ch: r, len: leftover, canOpen: cnode.canOpen, canClose: cnode.canClose, before: r, after: cnode.after };
+      recomputeFlanks([leftNode], r, cnode.after !== undefined ? cnode.after : -1);
+      mid.push(leftNode);
+    }
+    nodes.length = 0;
+    nodes.push(...before, ...mid, ...afterNodes);
+    // continue after the new node (its leftover, if any, is tried as
+    // an opener next); earlier openers already failed and cannot be
+    // unblocked by hiding delimiters inside the new node
+    i = before.length + 1;
+  }
+  // strikethrough (`~`): the old nearest-opener pass, which matches
+  // the docs; marked's del has no odd-match rule, but `~` runs that
+  // can both open and close are rare here
+  resolveDel(nodes);
+}
+
+// Strikethrough pass (nearest opener, as before), `~` nodes only.
+function resolveDel(nodes) {
   let delims = [];
   const rebuild = () => {
     delims = [];
     for (let i = 0; i < nodes.length; i++) {
-      if (nodes[i].t === 'delim') delims.push({ idx: i, node: nodes[i] });
+      if (nodes[i].t === 'delim' && nodes[i].ch === 126) delims.push({ idx: i, node: nodes[i] });
     }
   };
   rebuild();
@@ -2487,9 +2656,8 @@ function resolveEmphasis(nodes) {
     const opener = delims[found];
     const onode = opener.node;
     const use = (onode.len >= 2 && cnode.len >= 2) ? 2 : 1;
-    const type = cnode.ch === 126 ? 'del' : (use === 2 ? 'strong' : 'em');
     const children = nodes.slice(opener.idx + 1, closer.idx);
-    const newNode = { t: type, children };
+    const newNode = { t: 'del', children };
     onode.len -= use;
     cnode.len -= use;
     const before = nodes.slice(0, opener.idx);
@@ -2501,7 +2669,6 @@ function resolveEmphasis(nodes) {
     nodes.length = 0;
     nodes.push(...before, ...mid, ...after);
     rebuild();
-    // A match can unblock earlier pairs (lengths changed), so rescan.
     ci = 0;
   }
 }
