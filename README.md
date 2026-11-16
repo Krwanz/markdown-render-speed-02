@@ -26,12 +26,11 @@ produces with default options — only faster.
 
 On the 720 practice cases (CommonMark + GFM spec examples and 40 long
 generated READMEs), this parser matches marked 18.1.3 byte-for-byte on
-717 cases. The remaining 3 are long README docs with remaining
-HTML-block, fence-indent and loose/tight-list quirks.
+all 720 cases.
 
-Local timing (best of 5 runs, this machine): all 720 cases in ~400 ms
-vs marked's ~660 ms (~1.6× faster); the 40 long READMEs alone in
-~390 ms vs marked's ~645 ms (~1.65× faster). Two runs of the driver
+Local timing (best of 5 runs, this machine): all 720 cases in ~450 ms
+vs marked's ~670 ms (~1.49× faster); the 40 long READMEs alone in
+~433 ms vs marked's ~667 ms (~1.54× faster). Two runs of the driver
 produce byte-identical output.
 
 ## Referral

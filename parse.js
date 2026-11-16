@@ -591,11 +591,21 @@ function listMarker(L) {
   return { ordered, start, delim, markerKey: key, markerLen, contentIndent: contentIndent - baseCol, empty, markerCol };
 }
 
-// HTML block start: returns type 1..6 or 0. `line` is the remaining text.
-function htmlBlockType(s) {
+// HTML block start: returns type 1..6 or 0. `line` is the remaining text,
+// `startCol` the column its first character sits at. The leading
+// whitespace must be under 4 COLUMNS: a tab counts by its column width,
+// not as one character, so a lone tab (4 columns) never starts an HTML
+// block — it is indented code (doc-14: `\t<div>` after `  <div>`).
+function htmlBlockType(s, startCol = 0) {
   // s starts at the (possibly indented) tag position; leading spaces <= 3
-  let i = 0;
-  while (i < s.length && (s.charCodeAt(i) === SP || s.charCodeAt(i) === TAB) && i < 3) i++;
+  let i = 0, col = startCol;
+  while (i < s.length) {
+    const c = s.charCodeAt(i);
+    if (c === SP) { i++; col++; }
+    else if (c === TAB) { i++; col += 4 - (col % 4); }
+    else break;
+    if (col - startCol >= 4) return 0;
+  }
   if (i >= s.length || s.charCodeAt(i) !== 60) return 0; // <
   const t = s.slice(i + 1);
   const low = t.toLowerCase();
@@ -623,9 +633,15 @@ function htmlBlockType(s) {
 }
 
 // The type-1 tag name (script/pre/style/textarea) a line opens, or null.
-function htmlOpenTag(s) {
-  let i = 0;
-  while (i < s.length && (s.charCodeAt(i) === SP || s.charCodeAt(i) === TAB) && i < 3) i++;
+function htmlOpenTag(s, startCol = 0) {
+  let i = 0, col = startCol;
+  while (i < s.length) {
+    const c = s.charCodeAt(i);
+    if (c === SP) { i++; col++; }
+    else if (c === TAB) { i++; col += 4 - (col % 4); }
+    else break;
+    if (col - startCol >= 4) return null;
+  }
   if (i >= s.length || s.charCodeAt(i) !== 60) return null;
   const m = s.slice(i + 1).match(/^(script|pre|style|textarea)([\s>]|$)/i);
   return m ? m[1].toLowerCase() : null;
@@ -1104,7 +1120,7 @@ function parseBlocks(src) {
       if (fs) {
         // a backtick fence whose info string contains a backtick is not a fence
         r = !(fs.char === 96 && rest(L).indexOf('`') >= 0);
-      } else if (htmlBlockType(rest(L))) r = true;
+      } else if (htmlBlockType(rest(L), L.col)) r = true;
       else if (isThematicBreak(L)) r = true;
       else {
         const s2 = { i: L.i, col: L.col, pad: L.pad };
@@ -1128,7 +1144,7 @@ function parseBlocks(src) {
     if (indentAvail(L) >= 4) r = true;
     else if (atxHeading(L)) r = true;
     else if (fenceStart(L)) r = true;
-    else if (htmlBlockType(rest(L))) r = true;
+    else if (htmlBlockType(rest(L), L.col)) r = true;
     else if (isThematicBreak(L)) r = true;
     else if (listMarker(L)) r = true;
     else if (cch(L) === 62) r = true;
@@ -1148,7 +1164,7 @@ function parseBlocks(src) {
     if (S.stack[S.stack.length - 1].t === 'list') {
       const save = { i: L.i, col: L.col, pad: L.pad };
       let keep = false;
-      if (!atxHeading(L) && !fenceStart(L) && !htmlBlockType(rest(L)) &&
+      if (!atxHeading(L) && !fenceStart(L) && !htmlBlockType(rest(L), L.col) &&
           !isThematicBreak(L)) {
         // blockquote?
         const s2 = { i: L.i, col: L.col, pad: L.pad };
@@ -1193,10 +1209,10 @@ function parseBlocks(src) {
       L.i = fsSave.i; L.col = fsSave.col; L.pad = fsSave.pad;
     }
     // HTML block (a lone inline tag, type 7, cannot interrupt a paragraph)
-    const hb = htmlBlockType(rest(L));
+    const hb = htmlBlockType(rest(L), L.col);
     if (hb && !(hb === 7 && S.leaf && S.leaf.t === 'para')) {
       closeLeaf();
-      const tag = hb === 1 ? htmlOpenTag(rest(L)) : null;
+      const tag = hb === 1 ? htmlOpenTag(rest(L), L.col) : null;
       S.leaf = addChild({ t: 'html', htmlType: hb, htmlTag: tag, lines: [rest(L)] });
       if (htmlBlockEnds(hb, rest(L), tag)) {
         S.leaf.endLine = li;
