@@ -32,7 +32,12 @@ const PUNCT_RE = /[\p{P}\p{S}]/u;
 // Escape text/attribute content the way marked does when it does not
 // re-encode: < > " ' are always escaped; & is escaped unless it starts an
 // entity-like sequence (&#123; &#x1f; or &word;).
+const NEED_ESC_RE = /[&<>"']/;
+const NEED_ESC_ALL_RE = /[&<>"']/;
+
 function esc(s) {
+  // Fast path: most text has no escapable character at all.
+  if (!NEED_ESC_RE.test(s)) return s;
   let out = '';
   let start = 0;
   for (let i = 0; i < s.length; i++) {
@@ -55,6 +60,8 @@ function esc(s) {
 
 // Escape with every & encoded (used for code content and code spans).
 function escAll(s) {
+  // Fast path: most code has no escapable character at all.
+  if (!NEED_ESC_ALL_RE.test(s)) return s;
   let out = '';
   let start = 0;
   for (let i = 0; i < s.length; i++) {
@@ -1615,6 +1622,21 @@ function tryGfmAutolink(s, i, prev) {
     }
     return null;
   }
+  // Fast bail: a scheme or email autolink needs a ':' or '@' before the
+  // next whitespace (within 40 chars). Ordinary words have neither, and
+  // the full check below would scan them several times over.
+  {
+    let k = i;
+    const lim = Math.min(n, i + 40);
+    let hasTrigger = false;
+    while (k < lim) {
+      const cc = s.charCodeAt(k);
+      if (cc === 58 || cc === 64) { hasTrigger = true; break; }
+      if (isWSCode(cc) || cc === 60) break;
+      k++;
+    }
+    if (!hasTrigger) return null;
+  }
   // scheme:// (case-insensitive scheme, 1+ chars)
   if (isAlpha(s.charCodeAt(i))) {
     let k = i;
@@ -2149,6 +2171,21 @@ function scanInline(s, refs) {
         i = g.end;
         continue;
       }
+      // Not an autolink: bulk-slice the rest of this word in one go
+      // instead of stepping through it one char at a time. Only plain
+      // word characters are consumed (alphanumeric plus '.', '%', '+',
+      // '-'); anything else — whitespace, punctuation, '_' (emphasis),
+      // or a character that can start an inline construct — stops the
+      // slice, so the next word start still gets its autolink check.
+      let j = i + 1;
+      while (j < n) {
+        const cc = s.charCodeAt(j);
+        if (!(isAlnum(cc) || cc === 46 || cc === 37 || cc === 43 || cc === 45)) break;
+        j++;
+      }
+      pushText(s.slice(i, j));
+      i = j;
+      continue;
     }
     pushText(s[i]);
     i++;
