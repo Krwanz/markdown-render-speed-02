@@ -914,7 +914,18 @@ function parseBlocks(src) {
       }
     }
     if (para.prevStripped && !stripped) para.lines.push('');
-    para.lines.push(rest(L));
+    // A lazy `===` line inside a blockquote, following another lazy line,
+    // is not a setext underline: it stays in the paragraph, indented by
+    // four spaces (the lazy line's missing container markers). A `---`
+    // line never reaches here (it is a thematic break and interrupts).
+    let line = rest(L);
+    if (isLazy && para.prevLazy && setextLevel(L) === 1) {
+      let inBq = false;
+      for (let d = 1; d < S.stack.length; d++) if (S.stack[d].t === 'bq') { inBq = true; break; }
+      // exactly four spaces: the line's own leading indent is discarded
+      if (inBq) line = '    ' + line.replace(/^\s+/, '');
+    }
+    para.lines.push(line);
     if (stripped) para.stripState = true;
     else if (isLazy && remIndent < 4) para.stripState = false;
     para.prevStripped = stripped;
