@@ -1535,6 +1535,11 @@ function tokenizeInline(src, links, noAuto) {
   const tokens = [];
   let i = 0;
   const n = src.length;
+  // A bare email needs an '@' somewhere in this inline run; one
+  // native scan up front lets the per-word email branch be skipped
+  // entirely when there is none (schemes and www. are handled by
+  // their own branch and do not need it).
+  const srcHasAt = !noAuto && src.indexOf('@') !== -1;
   let textBuf = '';
   const flush = () => {
     if (textBuf) {
@@ -1666,7 +1671,7 @@ function tokenizeInline(src, links, noAuto) {
       ((ch === 'h' && (src.startsWith('http://', i) ||
         src.startsWith('https://', i))) ||
         (ch === 'w' && src.startsWith('www.', i)))) {
-      const r = tryGfmAutolink(src, i);
+      const r = tryGfmAutolink(src, i, srcHasAt);
       if (r) {
         flush();
         tokens.push({ kind: 'html', html: r.html });
@@ -1675,7 +1680,7 @@ function tokenizeInline(src, links, noAuto) {
       }
     }
     if (!noAuto && !gfmInLink && isEmailStart(src, i)) {
-      const r = tryGfmAutolink(src, i);
+      const r = tryGfmAutolink(src, i, srcHasAt);
       if (r) {
         flush();
         tokens.push({ kind: 'html', html: r.html });
@@ -2103,9 +2108,14 @@ function isEmailStart(src, i) {
   const ch = src[i];
   if (!ch) return false;
   const c = ch.charCodeAt(0);
-  return (c >= 48 && c <= 57) || (c >= 65 && c <= 90) ||
-    (c >= 97 && c <= 122) ||
-    ".!#$%&'*+/=?^_`{|}~-".indexOf(ch) !== -1;
+  if ((c >= 48 && c <= 57) || (c >= 65 && c <= 90) ||
+    (c >= 97 && c <= 122)) return true;
+  // The local-part punctuation set .!#$%&'*+/=?^_`{|}~- as char
+  // codes, avoiding a linear indexOf scan per character.
+  return c === 46 || c === 33 || c === 35 || c === 36 || c === 37 ||
+    c === 38 || c === 39 || c === 42 || c === 43 || c === 47 ||
+    c === 61 || c === 63 || c === 94 || c === 95 || c === 96 ||
+    c === 123 || c === 124 || c === 125 || c === 126 || c === 45;
 }
 
 // Bare-email shape: local part, '@', a domain with at least one dot
@@ -2118,7 +2128,7 @@ const SLASH_URL_RE = /\/\/[^\s<]+/y;
 const XMPP_PATH_RE = /\/[A-Za-z0-9@.]+/y;
 const WWW_RE = /(www\.[^\s<]+)/y;
 
-function tryGfmAutolink(src, i) {
+function tryGfmAutolink(src, i, hasAt) {
   // 1. Scheme autolink. Only http/https/ftp take '//' URLs, and only
   // mailto:/xmpp: take an email address (xmpp: also allows one path
   // segment of letters, digits, '@' and '.'). Any other scheme is
@@ -2178,7 +2188,11 @@ function tryGfmAutolink(src, i) {
   }
   // 3. Bare email autolink. The regex itself requires a dotted
   // domain and refuses a match followed by a word character or '-',
-  // so a trailing '.' or '?' simply stays outside the link.
+  // so a trailing '.' or '?' simply stays outside the link. A bare
+  // email needs an '@' in this inline run (hasAt, computed once by
+  // the caller); without it the regex would scan the whole word and
+  // fail, so skip it.
+  if (hasAt !== true) return null;
   EMAIL_RE.lastIndex = i;
   m = EMAIL_RE.exec(src);
   if (m) {
