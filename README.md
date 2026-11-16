@@ -4,37 +4,26 @@
 [![rank](https://make.fun/badge/markdown-render-speed-02/Krwanz/markdown-render-speed-02/rank.svg)](https://make.fun/bounty/markdown-render-speed-02/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=markdown-render-speed-02)
 [![reward](https://make.fun/badge/markdown-render-speed-02/Krwanz/markdown-render-speed-02/reward.svg)](https://make.fun/bounty/markdown-render-speed-02?utm_source=github&utm_medium=readme&utm_campaign=markdown-render-speed-02)
 
-A fast from-scratch CommonMark 0.31.2 + GFM 0.29 Markdown parser in plain
-JavaScript, written to return byte-for-byte the HTML that marked 18.1.3
-produces with default options — only faster.
+A fast, from-scratch CommonMark 0.31.2 + GFM 0.29 parser whose output
+matches marked 18.1.3 byte for byte — but renders noticeably faster.
+Dependency-free, Node.js standard library only.
 
-## How it works
+## Run it
 
-- `parse.js` — dependency-free module exporting `parse(markdown)`. A
-  single-pass block parser (ATX/setext headings, fenced/indented code,
-  blockquotes, nested/task lists, tables, thematic breaks, HTML blocks,
-  link reference definitions, paragraphs) plus an inline scanner
-  (emphasis/strong with a delimiter stack, code spans, links incl.
-  reference/autolinks/GFM autolinks, images, strikethrough, hard/soft
-  breaks, entities, raw HTML inline, backslash escapes). Hot paths use
-  char-code loops instead of regexes, and nothing is cached from one case
-  to the next.
-- `main.ts` — the driver: reads `cases.json` from `$MAKEFUN_INPUT_DIR`
-  (default `/input`), renders each case alone with `parse()`, and writes
-  `html.json` to `$MAKEFUN_OUTPUT_DIR` (default `/output`) as a JSON array
-  of HTML strings in case order.
+```sh
+mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
+```
+
+`main.ts` reads `cases.json` from `$MAKEFUN_INPUT_DIR` (or `/input`) and
+writes `html.json` — a JSON array of HTML strings, one per case, in case
+order — to `$MAKEFUN_OUTPUT_DIR` (or `/output`).
 
 ## Practice results
 
-On the 720 practice cases (CommonMark + GFM spec examples and 40 long
-generated READMEs), this parser matches marked 18.1.3 byte-for-byte on
-all 720 cases.
+- 720 / 720 practice cases byte-identical to marked 18.1.3
+- About 1.4x faster than marked on the practice set
 
-Local timing (best of 5 runs, this machine): all 720 cases in ~450 ms
-vs marked's ~670 ms (~1.49× faster); the 40 long READMEs alone in
-~433 ms vs marked's ~667 ms (~1.54× faster). Two runs of the driver
-produce byte-identical output.
+---
 
-## Referral
-
-Made with [make.fun](https://make.fun) — referral code `a15ed58m`.
+<sub>Entered as @mszwanz27 for make.fun's "Make Markdown rendering faster"
+bounty. Referral code: a15ed58m.</sub>
