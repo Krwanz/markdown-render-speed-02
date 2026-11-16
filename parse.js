@@ -1460,8 +1460,34 @@ function isTextStop(ch, next) {
 
 function parseInline(src, links, noAuto) {
   const tokens = tokenizeInline(src, links, noAuto);
+  suppressEmphasisAfterBacktickLink(tokens);
   const head = resolveEmphasis(tokens, src, links, noAuto);
   return renderInlineTokens(head);
+}
+
+// A link whose label holds both a long backtick run and a lone single
+// backtick pairs its backticks with a later code span's delimiters, so
+// emphasis between the link and that code span is literal in marked.
+// Neutralise the emphasis delimiters in that stretch (turn them into
+// plain text) so the resolver cannot pair them. The stretch ends at
+// the first code span after the link; with no code span after it,
+// there is nothing to pair with and emphasis forms normally.
+function suppressEmphasisAfterBacktickLink(tokens) {
+  for (let q = 0; q < tokens.length; q++) {
+    if (tokens[q].kind !== 'link' || tokens[q].backtickLabel !== true) continue;
+    let codeAt = -1;
+    for (let k = q + 1; k < tokens.length; k++) {
+      if (tokens[k].kind === 'code') { codeAt = k; break; }
+      if (tokens[k].kind === 'link' && tokens[k].backtickLabel === true) break;
+    }
+    if (codeAt === -1) continue;
+    for (let k = q + 1; k < codeAt; k++) {
+      if (tokens[k].kind === 'delim') {
+        tokens[k] = { kind: 'text', text: tokens[k].char.repeat(tokens[k].length) };
+      }
+    }
+    q = codeAt;
+  }
 }
 
 function isUnicodeWs(ch) {
@@ -1548,7 +1574,8 @@ function tokenizeInline(src, links, noAuto) {
       const r = tryLink(src, i, links);
       if (r) {
         flush();
-        tokens.push({ kind: r.isImage ? 'image' : 'link', html: r.html });
+        tokens.push({ kind: r.isImage ? 'image' : 'link', html: r.html,
+          backtickLabel: r.backtickLabel === true });
         i = r.end;
         continue;
       }
@@ -2304,6 +2331,25 @@ function labelEmHasCodeBacktick(head) {
   return false;
 }
 
+// True when a raw link label holds both a backtick run of length >= 2
+// and a lone single backtick (an escaped \` does not count). Such a
+// label's backticks pair with a later code span's delimiters and
+// suppress emphasis between the link and that code span.
+function labelHasBacktickPattern(raw) {
+  let sawLong = false, sawSingle = false;
+  for (let k = 0; k < raw.length; k++) {
+    if (raw[k] === '\\' && raw[k + 1] === '`') { k++; continue; }
+    if (raw[k] === '`') {
+      let m = k;
+      while (m < raw.length && raw[m] === '`') m++;
+      if (m - k >= 2) sawLong = true; else sawSingle = true;
+      k = m - 1;
+      if (sawLong && sawSingle) return true;
+    }
+  }
+  return false;
+}
+
 // Try a link or image at src[i] ('[' or '![').
 // Returns {html, end, isImage} or null.
 // A link label may only form a link when every backtick in it
@@ -2485,6 +2531,7 @@ function tryLink(src, i, links) {
     html: '<a href="' + escapeAttr(href) + '"' + titleAttr + '>' +
       labelHtml + '</a>',
     end: j, isImage: false,
+    backtickLabel: labelHasBacktickPattern(labelRaw),
   };
 }
 
