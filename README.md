@@ -26,11 +26,9 @@ produces with default options — only faster.
 
 On the 720 practice cases (CommonMark + GFM spec examples and 40 long
 generated READMEs), this parser matches marked 18.1.3 byte-for-byte on
-682 cases. The remaining 38 are edge cases: two spec examples about
-list-item indentation when blockquote markers sit at different columns
-on different lines (cm-259, cm-260) and 36 long README docs, which
-exercise those same list/blockquoute paths plus a few remaining
-emphasis, table-row and autolink quirks.
+707 cases. The remaining 13 are long README docs with remaining
+emphasis-nesting, link-destination, HTML-block and loose/tight-list
+quirks.
 
 Local timing (best of 5 runs, this machine): all 720 cases in ~400 ms
 vs marked's ~660 ms (~1.6× faster); the 40 long READMEs alone in
