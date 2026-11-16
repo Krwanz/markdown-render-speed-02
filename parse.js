@@ -1339,7 +1339,10 @@ function parseBlocks(src) {
 
     // --- blank line
     if (isBlankRest(L)) {
-      resolvePendingHtml(true);
+      // marked keeps an HTML block's trailing newline unless the next
+      // line is truly empty: a whitespace-only line (e.g. a tab) is
+      // not empty for this purpose
+      resolvePendingHtml(rest(L) === '');
       // a blank line ends a table
       while (S.stack.length > 1 && S.stack[S.stack.length - 1].t === 'table') S.stack.pop();
       closeLeaf();
@@ -1373,7 +1376,9 @@ function parseBlocks(src) {
     // blockquote line like ">  " leaves a space that continues an open
     // paragraph, but does not start one
     if (rest(L) === '' || (isBlankRest(L) && !(S.leaf && S.leaf.t === 'para'))) {
-      resolvePendingHtml(true);
+      // see above: only a truly empty line drops the HTML block's
+      // trailing newline
+      resolvePendingHtml(rest(L) === '');
       closeLeaf();
       S.blankPending = true;
       S.blankBq = null; for (let d = S.stack.length - 1; d >= 1; d--) if (S.stack[d].t === 'bq') { S.blankBq = S.stack[d]; break; }
@@ -1877,15 +1882,22 @@ function gfmHasDomain(s, i, end, hostStart, minTld) {
     const c = s.charCodeAt(j);
     if (c === 47 || c === 63 || c === 35) { hostEnd = j; break; }
   }
-  let lastDot = -1;
-  for (let j = hostStart; j < hostEnd; j++) if (s.charCodeAt(j) === 46) lastDot = j;
-  if (lastDot < 0) return false;
-  // TLD: minTld+ letters after the last dot (1 for emails, 2 for URLs)
-  let tldLen = 0;
-  for (let j = lastDot + 1; j < hostEnd; j++) {
-    if (isAlpha(s.charCodeAt(j))) tldLen++;
-    else return false;
+  // TLD dot: the last dot followed by at least one letter (a trailing
+  // dot, as in `img.shields.io.\`, is not a TLD dot)
+  let lastDot = -1, tldLen = 0;
+  for (let j = hostEnd - 1; j >= hostStart; j--) {
+    if (s.charCodeAt(j) !== 46) continue;
+    let len = 0;
+    for (let k = j + 1; k < hostEnd; k++) {
+      if (isAlpha(s.charCodeAt(k))) len++;
+      else break;
+    }
+    if (len > 0) { lastDot = j; tldLen = len; break; }
   }
+  if (lastDot < 0) return false;
+  // TLD: minTld+ letters right after the TLD dot; a non-letter ends
+  // the TLD (it starts the path/query, e.g. `www.foo.com\` or
+  // `www.foo.com:8080`) — it does not invalidate the domain
   return tldLen >= (minTld || 2);
 }
 
