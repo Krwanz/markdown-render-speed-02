@@ -1339,6 +1339,15 @@ function parseBlocks(src) {
 
     // --- blank line
     if (isBlankRest(L)) {
+      // A tab-only line inside a table is a row line, not a table end:
+      // marked's table regex only excludes space-only blank lines
+      // (` *\n`), so a `\t` line becomes an empty row and the table
+      // continues on the next line. (A blockquote above the table was
+      // already closed by the blank-line check at the top of the loop.)
+      if (S.stack.length > 1 && S.stack[S.stack.length - 1].t === 'table' && rest(L).indexOf('\t') >= 0) {
+        S.stack[S.stack.length - 1].rows.push(splitTableRow(''));
+        continue;
+      }
       // marked keeps an HTML block's trailing newline unless the next
       // line is truly empty: a whitespace-only line (e.g. a tab) is
       // not empty for this purpose
