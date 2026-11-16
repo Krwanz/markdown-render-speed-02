@@ -727,8 +727,11 @@ function parseBlocks(src) {
           else if (trimmed > 0) S.leaf.trailingNL = true;
           else S.leaf.trailingNL = (S.leaf.endLine < S.lines.length - 1 || S.endsNL);
         } else if (!S.leaf.closedByFence) {
-          // unclosed fence running to EOF
+          // unclosed fence running to EOF (or ended by a container
+          // break): a trailing blank content line already supplies
+          // the trailing newline via the join, so it adds none
           if (S.leaf.lines.length === 0) S.leaf.trailingNL = false;
+          else if (trimRight(S.leaf.lines[S.leaf.lines.length - 1]) === '') S.leaf.trailingNL = false;
           else S.leaf.trailingNL = (S.leaf.endLine < S.lines.length - 1 || S.endsNL);
         }
       }
@@ -1065,7 +1068,10 @@ function parseBlocks(src) {
       const info = rest(L);
       if (!(fs.char === 96 && info.indexOf('`') >= 0)) {
         closeLeaf();
-        S.leaf = addChild({ t: 'code', info: trimRight(trimLeft(info)), lines: [], fenced: true, fenceChar: fs.char, fenceLen: fs.len, fenceIndent: fs.indent, endLine: li, trailingNL: false });
+        // marked dedents fence content only for backtick fences
+        // (its indentCodeCompensation regex only matches ```); a
+        // tilde fence keeps its content lines' indent as-is
+        S.leaf = addChild({ t: 'code', info: trimRight(trimLeft(info)), lines: [], fenced: true, fenceChar: fs.char, fenceLen: fs.len, fenceIndent: fs.char === 126 ? 0 : fs.indent, endLine: li, trailingNL: false });
         return true;
       }
       // not a fence (backtick in a backtick fence's info string): rewind
@@ -1202,58 +1208,79 @@ function parseBlocks(src) {
     }
 
     // --- open leaf that consumes its own lines: fenced code
-    // A fenced code block's content lines are consumed even when they
-    // drop below a list item's indent (the fence protects them); but
-    // a missing blockquote `>` ends the block (the line is outside it).
+    // A fenced code block's content lines are consumed while they
+    // match the containers. A line that does not match ends the fence
+    // only when marked's list-item capture would drop it; otherwise
+    // it is a lazy continuation of the item and stays fence content.
+    // A missing blockquote `>` always ends the fence (the line is
+    // not in the blockquote's text at all).
     if (S.leaf && S.leaf.t === 'code' && S.leaf.fenced) {
       const m = matchContainers(L);
-      let bqFailed = false;
-      if (m.failedAt >= 0 && S.stack[m.failedAt].t === 'bq') {
-        closeTo(m.failedAt - 1);
-        bqFailed = true; // fall through to normal processing below
-      }
-      if (!bqFailed && m.failedAt >= 0) {
-        // list-item indent failure: the line is still code content
-        // unless it is a closing fence at the raw line level
-        const rawL = cur(raw);
-        if (isBlankRest(rawL)) {
-          consumeIndent(rawL, S.leaf.fenceIndent);
-          expandLeadingTab(rawL, S.stack.length > 1);
-          S.leaf.lines.push(rest(rawL));
-          S.leaf.endLine = S.li;
-          continue;
-        }
-        let closing = false;
-        if (indentAvail(rawL) < 4) {
-          const save = { i: rawL.i, col: rawL.col, pad: rawL.pad };
-          consumeIndent(rawL, 3);
-          const c = cch(rawL);
-          if (c === S.leaf.fenceChar) {
-            let n = 0;
-            while (cch(rawL) === c) { cadv(rawL); n++; }
-            if (n >= S.leaf.fenceLen) {
-              let ok = true;
-              while (cch(rawL) !== -1) { const d = cch(rawL); if (d !== SP && d !== TAB) { ok = false; break; } cadv(rawL); }
-              if (ok) closing = true;
+      if (m.failedAt >= 0) {
+        let ends = S.stack[m.failedAt].t === 'bq';
+        if (!ends) {
+          // list-item indent failure: the line stays content unless
+          // the fence's previous line was blank, a fence/heading/
+          // html/hr begin, or indented 4+ columns after the item
+          // indent (or there is no content line yet, so the previous
+          // line is the opening fence itself)
+          const lines = S.leaf.lines;
+          if (lines.length === 0) ends = true;
+          else {
+            const last = lines[lines.length - 1];
+            if (/^[ \t]*$/.test(last)) ends = true;
+            else {
+              const lead = /^[ ]*/.exec(last)[0].length + S.leaf.fenceIndent;
+              if (lead >= 4) ends = true;
+              else if (/^ {0,3}(`{3,}|~{3,})/.test(last)) ends = true;
+              else if (/^ {0,3}#{1,6}(?:[ \t]|$)/.test(last)) ends = true;
+              else if (/^ {0,3}<[a-zA-Z!/?]/.test(last)) ends = true;
+              else if (/^ {0,3}(?:(?:-[ \t]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})[ \t]*$/.test(last)) ends = true;
             }
           }
-          if (!closing) { rawL.i = save.i; rawL.col = save.col; rawL.pad = save.pad; }
         }
-        if (closing) {
-          if (S.leaf.lines.length > 0 && S.leaf.lines[S.leaf.lines.length - 1] !== '') S.leaf.trailingNL = true;
-          S.leaf.closedByFence = true;
-          // the fence closes the block and its containers
+        if (ends) {
+          // the fence is unterminated with the content so far, and
+          // the line is reprocessed outside the closed containers
+          // (a ``` line there opens a new fence)
           closeTo(m.failedAt - 1);
-          closeLeaf();
-          continue;
+          // fall through to normal processing below
+        } else {
+          // lazy continuation: still code content, unless the line
+          // starts a fence — a fence begin always breaks the item,
+          // so the line ends this fence and opens a new one
+          const rawL = cur(raw);
+          if (isBlankRest(rawL)) {
+            consumeIndent(rawL, S.leaf.fenceIndent);
+            expandLeadingTab(rawL, S.stack.length > 1);
+            S.leaf.lines.push(rest(rawL));
+            S.leaf.endLine = S.li;
+            continue;
+          }
+          let fenceBegin = false;
+          if (indentAvail(rawL) < 4) {
+            const save = { i: rawL.i, col: rawL.col, pad: rawL.pad };
+            consumeIndent(rawL, 3);
+            const c = cch(rawL);
+            if (c === 96 || c === 126) {
+              let n = 0;
+              while (cch(rawL) === c) { cadv(rawL); n++; }
+              if (n >= 3) fenceBegin = true;
+            }
+            rawL.i = save.i; rawL.col = save.col; rawL.pad = save.pad;
+          }
+          if (fenceBegin) {
+            closeTo(m.failedAt - 1);
+            // fall through to normal processing below
+          } else {
+            consumeIndent(rawL, S.leaf.fenceIndent);
+            expandLeadingTab(rawL, S.stack.length > 1);
+            S.leaf.lines.push(rest(rawL));
+            S.leaf.endLine = S.li;
+            continue;
+          }
         }
-        consumeIndent(rawL, S.leaf.fenceIndent);
-        expandLeadingTab(rawL, S.stack.length > 1);
-        S.leaf.lines.push(rest(rawL));
-        S.leaf.endLine = S.li;
-        continue;
-      }
-      if (!bqFailed) {
+      } else {
         // containers matched: check for a closing fence or content
         if (isBlankRest(L)) {
           // a blank line keeps its whitespace beyond the fence indent
@@ -1286,7 +1313,8 @@ function parseBlocks(src) {
         S.leaf.endLine = S.li;
         continue;
       }
-      // bqFailed: the blockquote ended; fall through to normal processing
+      // fall through to normal processing below (the fence ended
+      // and its containers were closed)
     }
     // --- indented code
     if (S.leaf && S.leaf.t === 'code' && !S.leaf.fenced) {
