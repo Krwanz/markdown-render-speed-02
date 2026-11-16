@@ -240,7 +240,7 @@ function curChar(c) {
 }
 function curWidth(c) {
   const ch = curChar(c);
-  if (ch === '\t') return c.tabRem || (4 - (c.col % 4));
+  if (ch === '\t') return c.tabRem || (4 - ((c.col - c.baseCol) % 4));
   return ch ? 1 : 0;
 }
 // Advance by n columns (may partially consume a tab).
@@ -248,7 +248,7 @@ function curAdvance(c, n) {
   while (n > 0 && c.pos < c.s.length) {
     const ch = c.s[c.pos];
     if (ch === '\t') {
-      const w = c.tabRem || (4 - (c.col % 4));
+      const w = c.tabRem || (4 - ((c.col - c.baseCol) % 4));
       if (n < w) { c.tabRem = w - n; c.col += n; return; }
       c.col += w; c.pos++; c.tabRem = 0; n -= w;
     } else {
@@ -260,7 +260,7 @@ function curAdvance(c, n) {
 function curAdvanceChar(c) {
   const ch = curChar(c);
   if (ch === '\t') {
-    c.col += c.tabRem || (4 - (c.col % 4));
+    c.col += c.tabRem || (4 - ((c.col - c.baseCol) % 4));
     c.pos++; c.tabRem = 0;
   } else if (ch) {
     c.pos++; c.col++;
@@ -275,7 +275,7 @@ function curIndent(c) {
     const ch = c.s[p];
     if (ch === ' ') { col++; p++; }
     else if (ch === '\t') {
-      const w = tabRem || (4 - (col % 4));
+      const w = tabRem || (4 - ((col - c.baseCol) % 4));
       col += w; p++; tabRem = 0;
     } else break;
   }
@@ -289,7 +289,7 @@ function curSkipSpaces(c, n) {
     const ch = c.s[c.pos];
     if (ch === ' ') { c.pos++; c.col++; skipped++; }
     else if (ch === '\t') {
-      const w = c.tabRem || (4 - (c.col % 4));
+      const w = c.tabRem || (4 - ((c.col - c.baseCol) % 4));
       if (skipped + w > n) { c.tabRem = w - (n - skipped); c.col += n - skipped; return n; }
       c.col += w; c.pos++; c.tabRem = 0; skipped += w;
     } else break;
