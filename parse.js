@@ -434,9 +434,15 @@ function setextLevel(L) {
 
 // List marker at cursor: returns {ordered, start, delim, markerKey,
 // markerLen, contentIndent, empty} or null. Leaves the cursor at the
-// start of the item's content.
+// start of the item's content. contentIndent is RELATIVE to the cursor's
+// effective column (col + pad) on entry — i.e. to the position after the
+// outer containers on the line where the item opens — so a continuation
+// line whose blockquote markers sit at different columns still matches
+// (cm-259, cm-260): the indent available after this line's own markers
+// is compared against the same relative value.
 function listMarker(L) {
   const save = { i: L.i, col: L.col, pad: L.pad };
+  const baseCol = save.col + save.pad;
   if (indentAvail(L) >= 4) return null;
   consumeIndent(L, 3);
   const markerCol = L.col;
@@ -484,7 +490,7 @@ function listMarker(L) {
     contentIndent = markerCol + markerLen + spaces;
     consumeIndent(L, spaces);
   }
-  return { ordered, start, delim, markerKey: key, markerLen, contentIndent, empty, markerCol };
+  return { ordered, start, delim, markerKey: key, markerLen, contentIndent: contentIndent - baseCol, empty, markerCol };
 }
 
 // HTML block start: returns type 1..6 or 0. `line` is the remaining text.
@@ -751,8 +757,23 @@ function parseBlocks(src) {
 
   // Match open containers against the cursor. Returns {depth, failedAt}.
   // A blank line matches every container.
-  function matchContainers(L) {
-    if (isBlankRest(L)) return { depth: S.stack.length - 1, failedAt: -1 };
+  // The match is cached per line: leaf paths (fenced/indented code, HTML)
+  // call this on the main cursor and then fall through to the main match
+  // on the same, already-advanced cursor — a second run would re-read
+  // consumed markers and fail, so a successful match is reused when the
+  // line, stack length and exact cursor position are unchanged.
+  function matchContainers(L, lineIdx = S.li) {
+    if (S.matchLine === lineIdx && S.matchStackLen === S.stack.length &&
+        S.matchI === L.i && S.matchCol === L.col && S.matchPad === L.pad &&
+        S.matchDepth >= 0) {
+      return { depth: S.matchDepth, failedAt: -1 };
+    }
+    if (isBlankRest(L)) {
+      S.matchLine = lineIdx; S.matchStackLen = S.stack.length;
+      S.matchI = L.i; S.matchCol = L.col; S.matchPad = L.pad;
+      S.matchDepth = S.stack.length - 1;
+      return { depth: S.stack.length - 1, failedAt: -1 };
+    }
     let depth = 0, failedAt = -1;
     for (let d = 1; d < S.stack.length; d++) {
       const node = S.stack[d];
@@ -770,10 +791,10 @@ function parseBlocks(src) {
           break;
         }
       } else if (node.t === 'item') {
-        // contentIndent is an absolute column; the cursor may already be
-        // part-way in (outer containers consumed).
-        // a blank rest matches the item: a blank line inside a container
-        // does not need to meet the content indent
+        // contentIndent is relative to the position after the outer
+        // containers on the line where the item opened; indentAvail
+        // counts the indent available from the cursor after this line's
+        // own containers, so the two compare directly.
         if (isBlankRest(L)) {
           depth = d;
           continue;
@@ -783,8 +804,8 @@ function parseBlocks(src) {
           failedAt = d;
           break;
         }
-        if (L.col + indentAvail(L) >= node.contentIndent) {
-          consumeIndent(L, node.contentIndent - L.col);
+        if (indentAvail(L) >= node.contentIndent) {
+          consumeIndent(L, node.contentIndent);
           depth = d;
         } else {
           failedAt = d;
@@ -793,6 +814,11 @@ function parseBlocks(src) {
       } else {
         depth = d; // list (and table, which is handled separately) matches
       }
+    }
+    if (failedAt < 0) {
+      S.matchLine = lineIdx; S.matchStackLen = S.stack.length;
+      S.matchI = L.i; S.matchCol = L.col; S.matchPad = L.pad;
+      S.matchDepth = depth;
     }
     return { depth, failedAt };
   }
@@ -803,7 +829,7 @@ function parseBlocks(src) {
     if (idx >= S.lines.length) return null;
     const nl = cur(S.lines[idx]);
     if (isBlankRest(nl)) return null;
-    const m = matchContainers(nl);
+    const m = matchContainers(nl, idx);
     if (m.failedAt >= 0) return null;
     return rest(nl);
   }
@@ -869,7 +895,7 @@ function parseBlocks(src) {
   function nextLineMatches(pred) {
     if (S.li + 1 >= S.lines.length) return false;
     const nl = cur(S.lines[S.li + 1]);
-    const m = matchContainers(nl);
+    const m = matchContainers(nl, S.li + 1);
     if (m.failedAt >= 0) return false;
     return pred(nl);
   }
@@ -883,7 +909,7 @@ function parseBlocks(src) {
   function nextLineDelimiterAligns() {
     if (S.li + 1 >= S.lines.length) return null;
     const nl = cur(S.lines[S.li + 1]);
-    const m = matchContainers(nl);
+    const m = matchContainers(nl, S.li + 1);
     if (m.failedAt >= 0) return null;
     return parseDelimiterRow(rest(nl));
   }
