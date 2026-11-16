@@ -26,8 +26,8 @@ produces with default options — only faster.
 
 On the 720 practice cases (CommonMark + GFM spec examples and 40 long
 generated READMEs), this parser matches marked 18.1.3 byte-for-byte on
-707 cases. The remaining 13 are long README docs with remaining
-emphasis-nesting, link-destination, HTML-block and loose/tight-list
+713 cases. The remaining 7 are long README docs with remaining
+link-destination, HTML-block, fence-indent and loose/tight-list
 quirks.
 
 Local timing (best of 5 runs, this machine): all 720 cases in ~400 ms
