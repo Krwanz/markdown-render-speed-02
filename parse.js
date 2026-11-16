@@ -29,6 +29,51 @@ function isAsciiPunct(c) {
 }
 const PUNCT_RE = /[\p{P}\p{S}]/u;
 
+// marked's emStrong/del mask (Lexer.#maskSrc): links, code spans and HTML
+// are masked to [aaa...] so emphasis never sees delimiters inside them.
+// The mask is applied to the whole inline run even when the link it
+// matches is not a valid link (e.g. an angle destination holding a
+// space), so a failed link's text keeps its delimiters literal.
+// blockSkip's link pattern is stricter than the link tokenizer's label
+// (it has no ``+(?=]) escape hatch and its code-span alternative cannot
+// hold inner backticks), so a link whose label has unbalanced backticks
+// is not masked as a link; instead blockSkip's code-span alternative
+// matches a bogus span from the stray backtick to a later one, masking
+// whatever lies between (e.g. _issue table_ in doc-09).
+// anyPunctuationOutsideCode runs first: it replaces the backticks inside
+// a code span with '+', which lets blockSkip's link match a label whose
+// code span holds inner backticks (doc-16/20/23). Every replacement
+// preserves length, so ranges computed on the masked string line up
+// with the original.
+const MASK_PUNCT_OUTSIDE_CODE_RE = /(`+)(?:[^`]|[^`][\s\S]*?[^`])\1(?!`)|`+|\\([\p{P}\p{S}])/gu;
+const BLOCK_SKIP_RE = /\[(?:[^\[\]`]|(?<a>`+)[^`]+\k<a>(?!`))*?\]\((?:\\[\s\S]|[^\\\(\)]|\((?:\\[\s\S]|[^\\\(\)])*\))*\)|(?<!`)()(?<b>`+)[^`]+\k<b>(?!`)|<(?! )[^<>]*?>/g;
+
+// Character ranges [start, end) of `src` that marked's mask hides from
+// emphasis/del. Only computed when the text holds a delimiter char.
+function maskedRanges(src) {
+  if (!src.includes('*') && !src.includes('_') && !src.includes('~')) return [];
+  const s1 = src.replace(MASK_PUNCT_OUTSIDE_CODE_RE, (m0, code, punct) => {
+    if (punct) return '+'.repeat(m0.length);
+    if (code) return code + m0.slice(code.length, -code.length).replace(/`/g, '+') + code;
+    return m0;
+  });
+  const ranges = [];
+  BLOCK_SKIP_RE.lastIndex = 0;
+  let m;
+  while ((m = BLOCK_SKIP_RE.exec(s1)) !== null) {
+    if (m[0].length === 0) { BLOCK_SKIP_RE.lastIndex++; continue; }
+    ranges.push([m.index, m.index + m[0].length]);
+  }
+  return ranges;
+}
+function isMasked(ranges, i) {
+  for (let k = 0; k < ranges.length; k++) {
+    if (i >= ranges[k][0] && i < ranges[k][1]) return true;
+    if (ranges[k][0] > i) break;
+  }
+  return false;
+}
+
 // Escape text/attribute content the way marked does when it does not
 // re-encode: < > " ' are always escaped; & is escaped unless it starts an
 // entity-like sequence (&#123; &#x1f; or &word;).
@@ -2210,6 +2255,10 @@ function scanInline(s, refs) {
   const flushText = () => { if (textBuf) { nodes.push({ t: 'text', s: textBuf }); textBuf = ''; } };
   const pushText = (str) => { textBuf += str; };
   const n = s.length;
+  // ranges marked's mask hides from emphasis (links/code/html, even
+  // when the link is not valid); a delimiter run starting inside one
+  // is literal text, not a delimiter
+  const masked = maskedRanges(s);
   let i = 0;
   while (i < n) {
     const c = s.charCodeAt(i);
@@ -2288,6 +2337,13 @@ function scanInline(s, refs) {
       // strikethrough needs exactly 1 or 2 tildes; a run of 3+ is
       // literal text, never a delimiter
       if (c === 126 && run >= 3) {
+        pushText(s.slice(i, i + run));
+        i += run;
+        continue;
+      }
+      // masked by marked's emStrong/del mask (inside a link, code span
+      // or HTML span, even a link that is not valid): literal text
+      if (isMasked(masked, i)) {
         pushText(s.slice(i, i + run));
         i += run;
         continue;
