@@ -256,8 +256,11 @@ function rest(L) {
 // of 4 columns), so `rest()` returns spaces instead of a raw tab. Used
 // for fenced-code content lines inside a container, where the tab sits
 // at a non-zero column; at column 0 the tab is kept literally.
-function expandLeadingTab(L) {
-  if (L.col > 0 && L.pad === 0 && L.i < L.s.length && L.s.charCodeAt(L.i) === TAB) {
+function expandLeadingTab(L, inContainer) {
+  // A leading tab in fenced-code content expands to spaces only inside
+  // a container (list/blockquote); at the top level — even when the fence
+  // itself is indented — the tab is kept literally.
+  if (inContainer && L.col > 0 && L.pad === 0 && L.i < L.s.length && L.s.charCodeAt(L.i) === TAB) {
     const w = 4 - (L.col % 4);
     L.pad = w;
     L.i++;
@@ -1189,7 +1192,7 @@ function parseBlocks(src) {
         const rawL = cur(raw);
         if (isBlankRest(rawL)) {
           consumeIndent(rawL, S.leaf.fenceIndent);
-          expandLeadingTab(rawL);
+          expandLeadingTab(rawL, S.stack.length > 1);
           S.leaf.lines.push(rest(rawL));
           S.leaf.endLine = S.li;
           continue;
@@ -1219,7 +1222,7 @@ function parseBlocks(src) {
           continue;
         }
         consumeIndent(rawL, S.leaf.fenceIndent);
-        expandLeadingTab(rawL);
+        expandLeadingTab(rawL, S.stack.length > 1);
         S.leaf.lines.push(rest(rawL));
         S.leaf.endLine = S.li;
         continue;
@@ -1229,7 +1232,7 @@ function parseBlocks(src) {
         if (isBlankRest(L)) {
           // a blank line keeps its whitespace beyond the fence indent
           consumeIndent(L, S.leaf.fenceIndent);
-          expandLeadingTab(L);
+          expandLeadingTab(L, S.stack.length > 1);
           S.leaf.lines.push(rest(L));
           S.leaf.endLine = S.li;
           continue;
@@ -1252,7 +1255,7 @@ function parseBlocks(src) {
         }
         if (closing) { if (S.leaf.lines.length > 0 && S.leaf.lines[S.leaf.lines.length - 1] !== '') S.leaf.trailingNL = true; S.leaf.closedByFence = true; closeLeaf(); continue; }
         consumeIndent(L, S.leaf.fenceIndent);
-        expandLeadingTab(L);
+        expandLeadingTab(L, S.stack.length > 1);
         S.leaf.lines.push(rest(L));
         S.leaf.endLine = S.li;
         continue;
