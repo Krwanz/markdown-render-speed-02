@@ -1531,6 +1531,20 @@ function isUnicodePunct(ch) {
 // Kinds: text, code, html, link, image, br, delim, del (children tokens).
 // When noAuto is set, GFM autolinks are not recognized (used for link
 // label text, where a bare URL stays plain text).
+//
+// Plain-text runs: when the email branch cannot fire in this inline
+// run (no '@' or ':' anywhere in it, so srcHasAt and srcHasColon are
+// both false), a stretch of characters no branch can act on is
+// swallowed with one slice instead of one append per character. The
+// run stops before every character a branch could claim: backslash,
+// backtick, '<', '[', '!', '*', '_', '~', '&', newline, and 'h'/'w'
+// while autolinks are live (an http(s):// or www. start must reach
+// the autolink branch). With autolinks off, or inside a raw <a> tag,
+// 'h' and 'w' are plain too. The email branch is the only one that
+// can fire on an ordinary letter, so while it is live the run is
+// skipped and the loop falls back to one character at a time.
+const PLAIN_RUN_RE = /[^\\`<\[!*_~&\nhw]+/y;
+const PLAIN_RUN_NOAUTO_RE = /[^\\`<\[!*_~&\n]+/y;
 function tokenizeInline(src, links, noAuto) {
   const tokens = [];
   let i = 0;
@@ -1683,7 +1697,7 @@ function tokenizeInline(src, links, noAuto) {
         continue;
       }
     }
-    if (!noAuto && !gfmInLink && (srcHasAt || srcHasColon) && isEmailStart(src, i)) {
+    if (!noAuto && !gfmInLink && (srcHasAt || srcHasColon) && isEmailStart(src, i) && couldAutolink(src, i)) {
       const r = tryGfmAutolink(src, i, srcHasAt);
       if (r) {
         flush();
@@ -1692,8 +1706,25 @@ function tokenizeInline(src, links, noAuto) {
         continue;
       }
     }
-    textBuf += ch;
-    i++;
+    // Fast path: swallow the plain run at once (see PLAIN_RUN_RE).
+    // When the email branch is live in this run it is skipped: the
+    // branch can fire on an ordinary letter, so a slice could swallow
+    // an email start the loop never sees.
+    if (!noAuto && !gfmInLink && (srcHasAt || srcHasColon)) {
+      textBuf += ch;
+      i++;
+    } else {
+      const runRe = (!noAuto && !gfmInLink) ? PLAIN_RUN_RE : PLAIN_RUN_NOAUTO_RE;
+      runRe.lastIndex = i;
+      const m = runRe.exec(src);
+      if (m) {
+        textBuf += m[0];
+        i += m[0].length;
+      } else {
+        textBuf += ch;
+        i++;
+      }
+    }
   }
   flush();
   return tokens;
@@ -2108,6 +2139,28 @@ function matchHtmlTag(src, i) {
 // letter, digit or email character qualifies; the tokenizer tries
 // positions left to right, so a match starting mid-word is only ever
 // reached when no longer match starting earlier consumed it.
+// An autolink starting at i needs a ':' (scheme) or '@' (bare
+// email) before the current word ends. The word can only continue
+// over scheme/local-part characters; hitting any other character
+// first proves no autolink can start here, so the three regexes
+// inside tryGfmAutolink are skipped. The gate is exact: a scheme
+// needs ':' after scheme characters, a bare email needs '@' after
+// local-part characters, and this set is the union of both classes,
+// so a skipped call could never have matched.
+function couldAutolink(src, i) {
+  const n = src.length;
+  for (let j = i; j < n; j++) {
+    const c = src.charCodeAt(j);
+    if (c === 58 || c === 64) return true;
+    if ((c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122)) continue;
+    if (c === 46 || c === 33 || c === 35 || c === 36 || c === 37 || c === 38 ||
+        c === 39 || c === 42 || c === 43 || c === 47 || c === 61 || c === 63 ||
+        c === 94 || c === 95 || c === 96 || c === 123 || c === 124 || c === 125 ||
+        c === 126 || c === 45) continue;
+    return false;
+  }
+  return false;
+}
 function isEmailStart(src, i) {
   const ch = src[i];
   if (!ch) return false;
