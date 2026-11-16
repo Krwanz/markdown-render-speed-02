@@ -1,3 +1,10 @@
+// Final fixes (practice 720/720):
+// - doc-36: a fenced code block ends when an OUTER container fails to
+//   match, not just when the blockquote itself fails.
+// - doc-30: the whitespace run after a blockquote `>` expands from its
+//   inner column (list-stripped) before consuming the optional space.
+// - doc-14: htmlBlockType/htmlOpenTag measure leading indent in
+//   columns, not characters, so a lone tab is indented code, not HTML.
 // A fast, dependency-free CommonMark 0.31.2 + GFM 0.29 parser written from
 // scratch. parse(markdown) returns exactly the HTML marked 18.1.3 renders
 // with its default options (GFM on, breaks off, pedantic off, async off).
@@ -5,13 +12,6 @@
 // algorithms, tuned to marked's observable output (probed against the
 // reference renderer): its escaping rules, autolink handling, table shape,
 // strikethrough with one or two tildes, and HTML-block line endings.
-// Final fixes that closed the last three practice gaps (720/720):
-// doc-36 — a fence whose outer container fails ends the fence (the line
-// is not fence content when the parent container is unreachable);
-// doc-30 — the whitespace run after a blockquote `>` expands from its
-// inner column (marked's J), not the absolute column; doc-14 — an HTML
-// block's leading indent is measured in columns, so a lone tab
-// (4 columns) is indented code, not an HTML block.
 
 const SP = 32, TAB = 9, LF = 10, CR = 13;
 
