@@ -676,16 +676,29 @@ function parseBlocks(src) {
     stack: null, // filled below
     leaf: null,
     blankPending: false,
+    blankBq: null, // innermost blockquote when the blank line was seen
     li: 0,
     pendingHtml: null, // html node whose trailing newline is not yet decided
     refs: new Map(), // normalized label -> {dest, title}
   };
   S.stack = [S.doc];
 
+  // Does the pending blank line mark a new node? Yes, except when the
+  // blank line was inside a blockquote that has since closed: a blank
+  // line inside a blockquote does not loosen the outer list. A blank
+  // line inside a nested list does propagate out to the outer item.
+  function takeBlank() {
+    if (!S.blankPending) return false;
+    const bq = S.blankBq;
+    S.blankPending = false;
+    S.blankBq = null;
+    if (bq && S.stack.indexOf(bq) < 0) return false;
+    return true;
+  }
+
   function addChild(node) {
     const parent = S.stack[S.stack.length - 1];
-    if (S.blankPending) node.blankBefore = true;
-    S.blankPending = false;
+    if (takeBlank()) node.blankBefore = true;
     parent.children.push(node);
     return node;
   }
@@ -1077,8 +1090,7 @@ function parseBlocks(src) {
           list = addChild({ t: 'list', ordered: lm.ordered, start: lm.start, delim: lm.delim, markerKey: lm.markerKey, tight: true, children: [] });
         }
         const item = { t: 'item', contentIndent: lm.contentIndent, children: [] };
-        if (S.blankPending) item.blankBefore = true;
-        S.blankPending = false;
+        if (takeBlank()) item.blankBefore = true;
         list.children.push(item);
         // only push the list when it is new; a reused list is already
         // on the stack (pushing it again would duplicate it)
@@ -1270,6 +1282,7 @@ function parseBlocks(src) {
           S.leaf.endedByBlank = true;
           closeLeaf();
           S.blankPending = true;
+          S.blankBq = null; for (let d = S.stack.length - 1; d >= 1; d--) if (S.stack[d].t === 'bq') { S.blankBq = S.stack[d]; break; }
           continue;
         }
         const text = rest(L);
@@ -1291,6 +1304,7 @@ function parseBlocks(src) {
       while (S.stack.length > 1 && S.stack[S.stack.length - 1].t === 'table') S.stack.pop();
       closeLeaf();
       S.blankPending = true;
+      S.blankBq = null; for (let d = S.stack.length - 1; d >= 1; d--) if (S.stack[d].t === 'bq') { S.blankBq = S.stack[d]; break; }
       continue;
     }
 
@@ -1322,6 +1336,7 @@ function parseBlocks(src) {
       resolvePendingHtml(true);
       closeLeaf();
       S.blankPending = true;
+      S.blankBq = null; for (let d = S.stack.length - 1; d >= 1; d--) if (S.stack[d].t === 'bq') { S.blankBq = S.stack[d]; break; }
       continue;
     }
     resolvePendingHtml(false);
