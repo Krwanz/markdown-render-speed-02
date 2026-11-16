@@ -2266,6 +2266,44 @@ function stripTags(html) {
   }).replace(/<[^>]*>/g, '');
 }
 
+// True when a resolved label's top level has a code span whose
+// rendered content holds a backtick and content follows it in the
+// label (it is not the last token). A backtick-holding code span at
+// the very end of the label does not block the link.
+function labelCodeBacktickNotLast(head) {
+  let node = head;
+  while (node) {
+    if (node.kind === 'code' && node.html &&
+      node.html.indexOf('`') !== -1 && node.next) return true;
+    node = node.next;
+  }
+  return false;
+}
+
+// True when a resolved token list has an emphasis/strong span whose
+// inner tokens include a code span whose rendered content holds a
+// backtick (a double-delimited code span with a lone backtick inside).
+function labelEmHasCodeBacktick(head) {
+  let node = head;
+  while (node) {
+    if ((node.kind === 'em' || node.kind === 'strong') && node.head) {
+      let inner = node.head;
+      while (inner) {
+        if (inner.kind === 'code' && inner.html &&
+          inner.html.indexOf('`') !== -1) return true;
+        if ((inner.kind === 'em' || inner.kind === 'strong' ||
+          inner.kind === 'del') && inner.head &&
+          labelEmHasCodeBacktick(inner.head)) return true;
+        inner = inner.next;
+      }
+    }
+    if ((node.kind === 'del') && node.head &&
+      labelEmHasCodeBacktick(node.head)) return true;
+    node = node.next;
+  }
+  return false;
+}
+
 // Try a link or image at src[i] ('[' or '![').
 // Returns {html, end, isImage} or null.
 // A link label may only form a link when every backtick in it
@@ -2415,7 +2453,33 @@ function tryLink(src, i, links) {
     if (t.kind === 'link') { nested = true; break; }
   }
   if (nested) { gfmInLink = savedInLink; return null; }
-  const labelHtml = renderInlineTokens(resolveEmphasis(labelTokens, labelRaw, links, true));
+  const resolvedLabel = resolveEmphasis(labelTokens, labelRaw, links, true);
+  // An emphasis span wrapping a code span whose content itself holds
+  // a backtick also blocks the link, and the failed link attempt
+  // leaves the label's emphasis unformed too: render the bracketed
+  // label literally (code spans formed, delimiters literal) and let
+  // the destination after ']' be parsed as ordinary inline text.
+  // The same holds for a bare code span holding a backtick that is
+  // not the label's last element: text after it breaks the link.
+  if (labelEmHasCodeBacktick(resolvedLabel) ||
+    labelCodeBacktickNotLast(resolvedLabel)) {
+    gfmInLink = savedInLink;
+    // Re-tokenize so the label renders as it was written: code spans
+    // formed, emphasis delimiters left literal.
+    let labelNoEm = '';
+    for (const t of tokenizeInline(labelRaw, links, true)) {
+      if (t.kind === 'text') labelNoEm += escapeText(t.text);
+      else if (t.kind === 'code' || t.kind === 'html' ||
+        t.kind === 'link' || t.kind === 'image') labelNoEm += t.html;
+      else if (t.kind === 'br') labelNoEm += '<br>';
+      else if (t.kind === 'delim') labelNoEm += t.char.repeat(t.length);
+    }
+    return {
+      html: (isImage ? '![' : '[') + labelNoEm + ']',
+      end: close + 1, isImage: false,
+    };
+  }
+  const labelHtml = renderInlineTokens(resolvedLabel);
   gfmInLink = savedInLink;
   return {
     html: '<a href="' + escapeAttr(href) + '"' + titleAttr + '>' +
