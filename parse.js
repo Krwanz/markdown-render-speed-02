@@ -2086,7 +2086,8 @@ function scanInline(s, refs) {
       const al = tryAngleAutolink(s, i);
       if (al) {
         flushText();
-        nodes.push({ t: 'autolink', href: al.href, text: al.text });
+        // explicit <...> autolink: may nest inside a link's text
+        nodes.push({ t: 'autolink', href: al.href, text: al.text, explicit: true });
         i = al.end;
         continue;
       }
@@ -2129,6 +2130,7 @@ function scanInline(s, refs) {
             if (isImage) {
               nodes.push({ t: 'image', src: il.dest, title: il.title, alt: plainText(children) });
             } else if (!containsLink(children)) {
+              downgradeGfmAutolinks(children);
               nodes.push({ t: 'link', href: il.dest, title: il.title, children });
             } else {
               // a link cannot contain another link: treat '[' as literal
@@ -2168,6 +2170,7 @@ function scanInline(s, refs) {
               if (isImage) {
                 nodes.push({ t: 'image', src: ref.dest, title: ref.title, alt: plainText(children) });
               } else if (!containsLink(children)) {
+                downgradeGfmAutolinks(children);
                 nodes.push({ t: 'link', href: ref.dest, title: ref.title, children });
               } else {
                 pushText('[');
@@ -2289,13 +2292,26 @@ function plainText(nodes) {
 }
 
 // Does any node in `nodes` (recursively) contain a link? A link's text
-// cannot itself contain a link.
+// cannot itself contain a link. Autolinks do not block: an explicit
+// <...> autolink nests inside a link, and a bare GFM autolink inside
+// link text is downgraded to plain text (see downgradeGfmAutolinks).
 function containsLink(nodes) {
   for (const nd of nodes) {
     if (nd.t === 'link') return true;
     if (nd.children && containsLink(nd.children)) return true;
   }
   return false;
+}
+
+// A bare GFM autolink inside a link's text is not a link at all: turn
+// such nodes (recursively) into plain text. Explicit <...> autolinks
+// keep their link.
+function downgradeGfmAutolinks(nodes) {
+  for (let k = 0; k < nodes.length; k++) {
+    const nd = nodes[k];
+    if (nd.t === 'autolink' && !nd.explicit) nodes[k] = { t: 'text', s: nd.text };
+    else if (nd.children) downgradeGfmAutolinks(nd.children);
+  }
 }
 
 // Render inline nodes to HTML.
