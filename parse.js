@@ -1538,8 +1538,12 @@ function tokenizeInline(src, links, noAuto) {
   // A bare email needs an '@' somewhere in this inline run; one
   // native scan up front lets the per-word email branch be skipped
   // entirely when there is none (schemes and www. are handled by
-  // their own branch and do not need it).
+  // their own branch and do not need it). A scheme needs a ':' in
+  // the run; the email branch is also the only caller that catches
+  // capital-letter schemes (Https:, Mailto:), so it runs when
+  // either ':' or '@' is present.
   const srcHasAt = !noAuto && src.indexOf('@') !== -1;
+  const srcHasColon = !noAuto && src.indexOf(':') !== -1;
   let textBuf = '';
   const flush = () => {
     if (textBuf) {
@@ -1679,7 +1683,7 @@ function tokenizeInline(src, links, noAuto) {
         continue;
       }
     }
-    if (!noAuto && !gfmInLink && isEmailStart(src, i)) {
+    if (!noAuto && !gfmInLink && (srcHasAt || srcHasColon) && isEmailStart(src, i)) {
       const r = tryGfmAutolink(src, i, srcHasAt);
       if (r) {
         flush();
