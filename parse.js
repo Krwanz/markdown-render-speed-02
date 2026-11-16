@@ -1663,9 +1663,28 @@ function gfmBoundary(c) {
   return isPunctCode(c);
 }
 
+// True when an `_` delimiter that can open emphasis is still waiting
+// for a closer in this inline span: the most recent can-open `_`
+// delim with no can-close `_` delim after it.
+function hasOpenUnderscore(nodes) {
+  let openIdx = -1;
+  for (let i = nodes.length - 1; i >= 0; i--) {
+    const nd = nodes[i];
+    if (nd.t === 'delim' && nd.ch === 95 && nd.len > 0 && nd.canOpen) { openIdx = i; break; }
+  }
+  if (openIdx < 0) return false;
+  for (let i = openIdx + 1; i < nodes.length; i++) {
+    const nd = nodes[i];
+    if (nd.t === 'delim' && nd.ch === 95 && nd.len > 0 && nd.canClose) return false;
+  }
+  return true;
+}
+
 // Try a GFM autolink (www. / scheme:// / email) at `s[i]`.
-// `prev` is the char code before i (-1 at start). Returns {href, text, end} or null.
-function tryGfmAutolink(s, i, prev) {
+// `prev` is the char code before i (-1 at start). `nodes` is the flat
+// node list scanned so far in this inline span (for the email/
+// underscore-closer rule). Returns {href, text, end} or null.
+function tryGfmAutolink(s, i, prev, nodes) {
   const n = s.length;
   if (!gfmBoundary(prev)) return null;
   // www. (lowercase only)
@@ -1746,46 +1765,69 @@ function tryGfmAutolink(s, i, prev) {
       return null;
     }
   }
-  // email: local@domain.tld — scan a run of email chars and validate
+  // email: local@domain.tld — local [A-Za-z0-9._+-]+ (marked 18),
+  // then a domain per emailDomainEnd above
   {
     let k = i;
-    // local part: alnum and . _ % + - (must not be empty)
+    // local part: alnum and . _ + - (must not be empty)
     let localLen = 0;
     while (k < n) {
       const c = s.charCodeAt(k);
-      if (isAlnum(c) || c === 46 || c === 95 || c === 37 || c === 43 || c === 45) { k++; localLen++; }
+      if (isAlnum(c) || c === 46 || c === 95 || c === 43 || c === 45) { k++; localLen++; }
       else break;
     }
     if (localLen > 0 && k < n && s.charCodeAt(k) === 64) {
       const atPos = k;
-      k++;
-      // domain: alnum . - _ with at least one dot and a TLD of 2+ letters
-      let dStart = k;
-      while (k < n) {
-        const c = s.charCodeAt(k);
-        if (isAlnum(c) || c === 46 || c === 45 || c === 95) k++;
+      // domain run: alnum . - _
+      let dEnd = atPos + 1;
+      while (dEnd < n) {
+        const c = s.charCodeAt(dEnd);
+        if (isAlnum(c) || c === 46 || c === 45 || c === 95) dEnd++;
         else break;
       }
-      if (k > dStart) {
-        // a domain ending in '_' or '-' is not a valid email at all
-        // (the trailing char is a domain character, not punctuation)
-        const lastC = s.charCodeAt(k - 1);
-        if (lastC === 95 || lastC === 45) return null;
-        let end = k;
-        // strip trailing sentence punctuation (not '_' or '-')
-        end = gfmTrimEnd(s, i, end);
-        if (end > atPos + 1 && gfmHasDomain(s, i, end, atPos + 1, 1)) {
-          const text = s.slice(i, end);
-          return { href: 'mailto:' + text, text, end };
-        }
+      // trailing underscores are the emphasis closer when an `_`
+      // opener is waiting in this span (see hasOpenUnderscore);
+      // marked's emphasis pass consumes them before the URL rule
+      // sees the email, so trim them off the candidate first
+      let runEnd = dEnd;
+      if (runEnd > atPos + 1 && s.charCodeAt(runEnd - 1) === 95 && hasOpenUnderscore(nodes)) {
+        while (runEnd > atPos + 1 && s.charCodeAt(runEnd - 1) === 95) runEnd--;
+      }
+      const end = emailDomainEnd(s, atPos, runEnd);
+      if (end > 0) {
+        const text = s.slice(i, end);
+        return { href: 'mailto:' + text, text, end };
       }
     }
   }
   return null;
 }
 
-// End of a GFM URL starting at `i`: consume until whitespace or <,
-// then trim trailing punctuation per the GFM rules.
+// Longest valid email-domain match in s[atPos+1..runEnd), per marked's
+// email regex: first label [a-zA-Z0-9-_]+, then one or more dot-labels
+// '.' [a-zA-Z0-9-_]* [a-zA-Z0-9]; the character after the match must
+// not be a word character or '-'. Returns the end index, or -1.
+function emailDomainEnd(s, atPos, runEnd) {
+  let j = atPos + 1;
+  while (j < runEnd && (isAlnum(s.charCodeAt(j)) || s.charCodeAt(j) === 95 || s.charCodeAt(j) === 45)) j++;
+  if (j === atPos + 1) return -1;
+  let best = -1;
+  while (j < runEnd && s.charCodeAt(j) === 46) {
+    // dot-label: '.' [a-zA-Z0-9-_]* [a-zA-Z0-9]
+    let m = j + 1;
+    while (m < runEnd && (isAlnum(s.charCodeAt(m)) || s.charCodeAt(m) === 95 || s.charCodeAt(m) === 45)) m++;
+    if (m === j + 1) break; // empty label
+    // the label must end in an alphanumeric; backtrack over trailing _/-
+    let e = m;
+    while (e > j + 1 && !isAlnum(s.charCodeAt(e - 1))) e--;
+    if (e === j + 1) break; // label has no alphanumeric at all
+    const nx = e < runEnd ? s.charCodeAt(e) : -1;
+    if (nx >= 0 && (isAlnum(nx) || nx === 95 || nx === 45)) break; // word char follows: no match here
+    best = e;
+    j = e; // a longer match with more labels may follow
+  }
+  return best;
+}
 function gfmUrlEnd(s, i) {
   const n = s.length;
   let k = i;
@@ -2008,6 +2050,27 @@ function tryEntity(s, i) {
   return null;
 }
 
+// Document-level inline-lexer state, reset per parse() call. Mirrors
+// marked: an inline `<a ...>` tag sets inLink (cleared by `</a>`), and
+// while inLink is set, bare GFM autolinks (www. / scheme:// / email)
+// are not created — so one unclosed multi-line `<a>` tag suppresses
+// every later bare autolink in the document (doc-03). HTML blocks never
+// reach scanInline, so tags inside them do not toggle this.
+let inlineState = { inLink: false, inRawBlock: false };
+
+// Scan link/image text the way marked does: inLink is forced on while
+// scanning (bare autolinks inside link text never form) and the
+// document-level flags are restored afterwards, so a tag inside link
+// text does not leak into the rest of the document.
+function scanLinkText(text, refs) {
+  const savedLink = inlineState.inLink, savedRaw = inlineState.inRawBlock;
+  inlineState.inLink = true;
+  const nodes = scanInline(text, refs);
+  inlineState.inLink = savedLink;
+  inlineState.inRawBlock = savedRaw;
+  return nodes;
+}
+
 // Scan inline text into a flat node list.
 function scanInline(s, refs) {
   const nodes = [];
@@ -2123,7 +2186,12 @@ function scanInline(s, refs) {
       const he = inlineHtmlEnd(s, i);
       if (he > 0) {
         flushText();
-        nodes.push({ t: 'html', s: s.slice(i, he) });
+        // marked's tag rule toggles the document-level inLink flag:
+        // `<a ` (with a space) opens it, `</a>` closes it
+        const tagText = s.slice(i, he);
+        if (/^<a /i.test(tagText)) inlineState.inLink = true;
+        else if (/^<\/a>/i.test(tagText)) inlineState.inLink = false;
+        nodes.push({ t: 'html', s: tagText });
         i = he;
         continue;
       }
@@ -2154,7 +2222,7 @@ function scanInline(s, refs) {
           const il = parseInlineLink(s, j);
           if (il) {
             flushText();
-            const children = scanInline(lt.text, refs);
+            const children = scanLinkText(lt.text, refs);
             resolveEmphasis(children);
             if (isImage) {
               nodes.push({ t: 'image', src: il.dest, title: il.title, alt: plainText(children) });
@@ -2194,7 +2262,7 @@ function scanInline(s, refs) {
             const ref = norm ? refs.get(norm) : undefined;
             if (ref) {
               flushText();
-              const children = scanInline(lt.text, refs);
+              const children = scanLinkText(lt.text, refs);
               resolveEmphasis(children);
               if (isImage) {
                 nodes.push({ t: 'image', src: ref.dest, title: ref.title, alt: plainText(children) });
@@ -2219,10 +2287,11 @@ function scanInline(s, refs) {
       continue;
     }
     // GFM autolink (www. / scheme:// / email); an email local part may
-    // start with a digit, '.', '_', '%', '+' or '-'
+    // start with a digit, '.', '_', '%', '+' or '-'. Suppressed while
+    // the document-level inLink flag is set (see inlineState above).
     if (isAlnum(c) || c === 46 || c === 95 || c === 37 || c === 43 || c === 45) {
       const prev = i > 0 ? s.charCodeAt(i - 1) : -1;
-      const g = tryGfmAutolink(s, i, prev);
+      const g = inlineState.inLink ? null : tryGfmAutolink(s, i, prev, nodes);
       if (g) {
         flushText();
         nodes.push({ t: 'autolink', href: g.href, text: g.text });
@@ -2524,6 +2593,8 @@ function renderItem(item, refs, tight) {
 // ------------------------------------------------------------------ entry point
 
 export function parse(markdown) {
+  // fresh document-level inline state (inLink / inRawBlock)
+  inlineState = { inLink: false, inRawBlock: false };
   const { doc, refs } = parseBlocks(markdown);
   return renderBlock(doc, refs, false, null);
 }
