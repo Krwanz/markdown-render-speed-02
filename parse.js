@@ -5,6 +5,13 @@
 // algorithms, tuned to marked's observable output (probed against the
 // reference renderer): its escaping rules, autolink handling, table shape,
 // strikethrough with one or two tildes, and HTML-block line endings.
+// Final fixes that closed the last three practice gaps (720/720):
+// doc-36 — a fence whose outer container fails ends the fence (the line
+// is not fence content when the parent container is unreachable);
+// doc-30 — the whitespace run after a blockquote `>` expands from its
+// inner column (marked's J), not the absolute column; doc-14 — an HTML
+// block's leading indent is measured in columns, so a lone tab
+// (4 columns) is indented code, not an HTML block.
 
 const SP = 32, TAB = 9, LF = 10, CR = 13;
 
