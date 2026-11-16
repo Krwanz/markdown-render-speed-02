@@ -1911,19 +1911,26 @@ function parseLinkText(s, i) {
     const c = s.charCodeAt(j);
     if (c === 92 && j + 1 < n) { j += 2; continue; }
     if (c === 96) {
+      // code span in link text (marked's link-text rule): an opening
+      // backtick run, any run of non-backtick chars, then a closing
+      // backtick run of ANY length (the runs need not match). If no
+      // closing run exists the link text is invalid — except a run of
+      // 2+ backticks immediately before `]`, which is literal text.
       let run = 0;
       while (j + run < n && s.charCodeAt(j + run) === 96) run++;
-      let k = j + run, found = -1;
+      if (run >= 2 && j + run < n && s.charCodeAt(j + run) === 93) { j += run; continue; }
+      let k = j + run, found = -1, closeRun = 0;
       while (k < n) {
-        if (s.charCodeAt(k) === 96) {
+        const d = s.charCodeAt(k);
+        if (d === 96) {
           let r2 = 0;
           while (k + r2 < n && s.charCodeAt(k + r2) === 96) r2++;
-          if (r2 === run) { found = k; break; }
-          k += r2;
-        } else k++;
+          found = k; closeRun = r2; break;
+        }
+        k++;
       }
       if (found < 0) return null;
-      j = found + run;
+      j = found + closeRun;
       continue;
     }
     if (c === 60) { // < — skip an inline HTML tag or an autolink
