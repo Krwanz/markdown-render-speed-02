@@ -635,8 +635,11 @@ function phase2(st, cur, blank) {
     if (t.type === 'code') {
       // A blank line is only code content if the next line stays in the
       // block; hold it until then. An indented code blank keeps the
-      // spaces beyond the 4-column indent; a fenced one keeps the line.
+      // spaces beyond the 4-column indent; a fenced one keeps the line,
+      // except a backtick fence strips its indent from the blank line
+      // just as from content lines (a tilde fence keeps it whole).
       if (!t.fenced) curSkipSpaces(cur, 4);
+      else if (t.fenceChar === '`') curSkipIndentChars(cur, t.fenceIndent);
       st.pendingBlanks.push(curText(cur));
       st.i++;
       return;
