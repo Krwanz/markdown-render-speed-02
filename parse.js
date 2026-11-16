@@ -267,6 +267,52 @@ function expandLeadingTab(L, inContainer) {
     L.col += w;
   }
 }
+// Expand the whitespace run after a blockquote `>` marker (marked's
+// blockquoteMarkerWhitespace + J): the run expands from the column
+// b.length in the list-stripped inner text, where b is the marker
+// (leading spaces + '>'). `shift` is the columns the outer list
+// items (and blockquotes) have stripped from the front of the line,
+// so the inner column is L.col - shift. Only this run is expanded;
+// a tab elsewhere in the line stays literal. The run is expanded
+// only when it contains a tab and non-whitespace follows it; a run
+// to end-of-line is blank and is handled as blank.
+function expandBqRun(L, shift) {
+  let col = L.col - shift;
+  let w = 0;
+  let i = L.i, pad = L.pad;
+  let hasTab = false;
+  for (;;) {
+    let c;
+    if (pad > 0) c = SP;
+    else if (i < L.s.length) c = L.s.charCodeAt(i);
+    else break;
+    if (c === SP) { w++; col++; if (pad > 0) pad--; else i++; }
+    else if (c === TAB) {
+      hasTab = true;
+      const tw = 4 - (col % 4);
+      w += tw; col += tw; i++;
+    } else break;
+  }
+  if (hasTab && i < L.s.length) {
+    L.i = i; L.pad = w; L.col = L.col + w;
+  }
+}
+// Strip a fenced code block's indent by CHARACTER count (marked's Dt:
+// `r.slice(Math.min(i.length, s.length))` removes up to s.length
+// characters of leading whitespace, where s is the fence's indent
+// string). A tab is one character here, not four columns, so a tab
+// in a fence whose indent is 1-3 characters is removed entirely.
+function consumeFenceIndent(L, n) {
+  let removed = 0;
+  while (removed < n) {
+    if (L.pad > 0) { L.pad--; L.col++; removed++; }
+    else if (L.i < L.s.length) {
+      const c = L.s.charCodeAt(L.i);
+      if (c === SP || c === TAB) { cadv(L); removed++; }
+      else break;
+    } else break;
+  }
+}
 // Is the rest of the line blank (only spaces/tabs)?
 function isBlankRest(L) {
   if (L.pad > 0) return false;
@@ -386,16 +432,23 @@ function atxHeading(L) {
 }
 
 function fenceStart(L) {
-  // returns {char, len, indent} or null; cursor left past the fence run
+  // returns {char, len, indent, indentChars} or null; cursor left past the fence run
   const save = { i: L.i, col: L.col, pad: L.pad };
   if (indentAvail(L) >= 4) return null;
+  const i0 = L.i, pad0 = L.pad;
   const indent = consumeIndent(L, 3);
+  // indentChars: characters of the fence's indent string (marked's Dt
+  // counts characters, not columns; a tab is one character). Pad
+  // consumed counts as characters (it is spaces in the inner text);
+  // pad created by a straddling tab does not (the tab itself is the
+  // one character).
+  const indentChars = (L.i - i0) + Math.max(0, pad0 - L.pad);
   const c = cch(L);
   if (c !== 96 && c !== 126) { L.i = save.i; L.col = save.col; L.pad = save.pad; return null; }
   let n = 0;
   while (cch(L) === c) { cadv(L); n++; }
   if (n < 3) { L.i = save.i; L.col = save.col; L.pad = save.pad; return null; }
-  return { char: c, len: n, indent };
+  return { char: c, len: n, indent, indentChars };
 }
 
 function isThematicBreak(L) {
@@ -778,15 +831,24 @@ function parseBlocks(src) {
       return { depth: S.stack.length - 1, failedAt: -1 };
     }
     let depth = 0, failedAt = -1;
+    // Columns the outer containers have stripped from the front of the
+    // line (in the inner text): list items strip their contentIndent,
+    // blockquotes strip marker + run. A tab after a `>` expands from
+    // its column in that inner text (marked's J), i.e. L.col minus
+    // the shift.
+    let itemShift = 0, bqShift = 0;
     for (let d = 1; d < S.stack.length; d++) {
       const node = S.stack[d];
       if (node.t === 'bq') {
         const save = { i: L.i, col: L.col, pad: L.pad };
+        const colBefore = L.col;
         consumeIndent(L, 3);
         if (cch(L) === 62) {
           cadv(L);
           // one optional space after '>'; a tab counts as one column
           if (cch(L) === SP || cch(L) === TAB) consumeIndent(L, 1);
+          expandBqRun(L, itemShift + bqShift);
+          bqShift += L.col - colBefore;
           depth = d;
         } else {
           L.i = save.i; L.col = save.col; L.pad = save.pad;
@@ -809,6 +871,7 @@ function parseBlocks(src) {
         }
         if (indentAvail(L) >= node.contentIndent) {
           consumeIndent(L, node.contentIndent);
+          itemShift += node.contentIndent;
           depth = d;
         } else {
           failedAt = d;
@@ -1071,7 +1134,7 @@ function parseBlocks(src) {
         // marked dedents fence content only for backtick fences
         // (its indentCodeCompensation regex only matches ```); a
         // tilde fence keeps its content lines' indent as-is
-        S.leaf = addChild({ t: 'code', info: trimRight(trimLeft(info)), lines: [], fenced: true, fenceChar: fs.char, fenceLen: fs.len, fenceIndent: fs.char === 126 ? 0 : fs.indent, endLine: li, trailingNL: false });
+        S.leaf = addChild({ t: 'code', info: trimRight(trimLeft(info)), lines: [], fenced: true, fenceChar: fs.char, fenceLen: fs.len, fenceIndent: fs.char === 126 ? 0 : fs.indent, fenceIndentChars: fs.char === 126 ? 0 : fs.indentChars, endLine: li, trailingNL: false });
         return true;
       }
       // not a fence (backtick in a backtick fence's info string): rewind
@@ -1106,6 +1169,14 @@ function parseBlocks(src) {
         cadv(L);
         // one optional space after '>'; a tab counts as one column
         if (cch(L) === SP || cch(L) === TAB) consumeIndent(L, 1);
+        // expand the whitespace run after the marker from its inner
+        // column (marked's J); the shift is the list-item indents
+        // stripped from this line (outer blockquotes are already
+        // matched and their markers are in L.col, so a tab after a
+        // nested '>' opening on this line is approximated)
+        let ishift = 0;
+        for (let d = 1; d < S.stack.length; d++) if (S.stack[d].t === 'item') ishift += S.stack[d].contentIndent;
+        expandBqRun(L, ishift);
         closeLeaf();
         const bq = addChild({ t: 'bq', children: [] });
         S.stack.push(bq);
@@ -1242,8 +1313,12 @@ function parseBlocks(src) {
         if (ends) {
           // the fence is unterminated with the content so far, and
           // the line is reprocessed outside the closed containers
-          // (a ``` line there opens a new fence)
+          // (a ``` line there opens a new fence). Reset the cursor:
+          // the failed match left it past the containers that did
+          // match, so reprocessing without a reset would fail to
+          // match the still-open item and close it wrongly.
           closeTo(m.failedAt - 1);
+          L.i = 0; L.col = 0; L.pad = 0;
           // fall through to normal processing below
         } else {
           // lazy continuation: still code content, unless the line
@@ -1251,7 +1326,7 @@ function parseBlocks(src) {
           // so the line ends this fence and opens a new one
           const rawL = cur(raw);
           if (isBlankRest(rawL)) {
-            consumeIndent(rawL, S.leaf.fenceIndent);
+            consumeFenceIndent(rawL, S.leaf.fenceIndentChars);
             expandLeadingTab(rawL, S.stack.length > 1);
             S.leaf.lines.push(rest(rawL));
             S.leaf.endLine = S.li;
@@ -1271,9 +1346,10 @@ function parseBlocks(src) {
           }
           if (fenceBegin) {
             closeTo(m.failedAt - 1);
+            L.i = 0; L.col = 0; L.pad = 0;
             // fall through to normal processing below
           } else {
-            consumeIndent(rawL, S.leaf.fenceIndent);
+            consumeFenceIndent(rawL, S.leaf.fenceIndentChars);
             expandLeadingTab(rawL, S.stack.length > 1);
             S.leaf.lines.push(rest(rawL));
             S.leaf.endLine = S.li;
@@ -1284,7 +1360,7 @@ function parseBlocks(src) {
         // containers matched: check for a closing fence or content
         if (isBlankRest(L)) {
           // a blank line keeps its whitespace beyond the fence indent
-          consumeIndent(L, S.leaf.fenceIndent);
+          consumeFenceIndent(L, S.leaf.fenceIndentChars);
           expandLeadingTab(L, S.stack.length > 1);
           S.leaf.lines.push(rest(L));
           S.leaf.endLine = S.li;
@@ -1307,7 +1383,7 @@ function parseBlocks(src) {
           if (!closing) { L.i = save.i; L.col = save.col; L.pad = save.pad; }
         }
         if (closing) { if (S.leaf.lines.length > 0 && S.leaf.lines[S.leaf.lines.length - 1] !== '') S.leaf.trailingNL = true; S.leaf.closedByFence = true; closeLeaf(); continue; }
-        consumeIndent(L, S.leaf.fenceIndent);
+        consumeFenceIndent(L, S.leaf.fenceIndentChars);
         expandLeadingTab(L, S.stack.length > 1);
         S.leaf.lines.push(rest(L));
         S.leaf.endLine = S.li;
