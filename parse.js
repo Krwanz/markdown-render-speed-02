@@ -296,6 +296,21 @@ function curSkipSpaces(c, n) {
   }
   return c.col - before;
 }
+// Skip up to n leading whitespace CHARACTERS (a tab counts as one,
+// and is consumed whole even if only part of its width falls in the
+// strip). Used for a backtick fence's indent: marked removes the
+// fence indent as characters, so a leading tab is gone entirely
+// rather than leaving (width - indent) spaces.
+function curSkipIndentChars(c, n) {
+  while (n > 0 && c.pos < c.s.length) {
+    const ch = c.s[c.pos];
+    if (ch === ' ') { c.pos++; c.col++; n--; }
+    else if (ch === '\t') {
+      c.col += c.tabRem || (4 - ((c.col - c.baseCol) % 4));
+      c.pos++; c.tabRem = 0; n--;
+    } else break;
+  }
+}
 // The remaining text of the line from the cursor (raw, tabs intact).
 function curRest(c) {
   return c.s.slice(c.pos);
@@ -700,8 +715,9 @@ function phase2(st, cur, blank) {
     }
     // Fenced code content: the opening fence's indent is stripped,
     // but only for backtick fences — marked keeps the full indent
-    // for tilde fences.
-    if (t.fenceChar === '`') curSkipSpaces(cur, t.fenceIndent);
+    // for tilde fences. The strip counts whitespace characters, so
+    // a leading tab is removed whole (see curSkipIndentChars).
+    if (t.fenceChar === '`') curSkipIndentChars(cur, t.fenceIndent);
     let line = curText(cur);
     // A tab in the leading whitespace of a nested fenced code line
     // expands to spaces up to the next tab stop. Its column is
