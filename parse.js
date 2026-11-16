@@ -1470,16 +1470,26 @@ function parseInline(src, links, noAuto) {
 // emphasis between the link and that code span is literal in marked.
 // Neutralise the emphasis delimiters in that stretch (turn them into
 // plain text) so the resolver cannot pair them. The stretch ends at
-// the first code span after the link; with no code span after it,
-// there is nothing to pair with and emphasis forms normally.
+// the code span that pairs with the label's long run — a code span
+// whose content holds a backtick — when one follows the link; else
+// it ends at the first code span (or link holding one) after it.
+// With no code span after the link, emphasis forms normally.
 function suppressEmphasisAfterBacktickLink(tokens) {
   for (let q = 0; q < tokens.length; q++) {
     if (tokens[q].kind !== 'link' || tokens[q].backtickLabel !== true) continue;
-    let codeAt = -1;
+    let firstAt = -1, longAt = -1;
     for (let k = q + 1; k < tokens.length; k++) {
-      if (tokens[k].kind === 'code') { codeAt = k; break; }
-      if (tokens[k].kind === 'link' && tokens[k].backtickLabel === true) break;
+      const t = tokens[k];
+      if (t.kind === 'link' && t.backtickLabel === true) break;
+      if (firstAt === -1 && ((t.kind === 'code') ||
+        (t.kind === 'link' && t.html && t.html.indexOf('<code>') !== -1))) {
+        firstAt = k;
+      }
+      if (t.kind === 'code' && t.html && t.html.indexOf('`') !== -1) {
+        longAt = k; break;
+      }
     }
+    const codeAt = longAt !== -1 ? longAt : firstAt;
     if (codeAt === -1) continue;
     for (let k = q + 1; k < codeAt; k++) {
       if (tokens[k].kind === 'delim') {
@@ -2332,9 +2342,11 @@ function labelEmHasCodeBacktick(head) {
 }
 
 // True when a raw link label holds both a backtick run of length >= 2
-// and a lone single backtick (an escaped \` does not count). Such a
-// label's backticks pair with a later code span's delimiters and
-// suppress emphasis between the link and that code span.
+// and a lone single backtick, where a run is lone only if no later run
+// of the same length closes it into a code span (a backtick inside
+// such a span is consumed, not lone). Such a label's backticks pair
+// with a later code span's delimiters and suppress emphasis between
+// the link and that code span.
 function labelHasBacktickPattern(raw) {
   let sawLong = false, sawSingle = false;
   for (let k = 0; k < raw.length; k++) {
@@ -2342,9 +2354,22 @@ function labelHasBacktickPattern(raw) {
     if (raw[k] === '`') {
       let m = k;
       while (m < raw.length && raw[m] === '`') m++;
-      if (m - k >= 2) sawLong = true; else sawSingle = true;
-      k = m - 1;
+      const len = m - k;
+      // Find a later run of the same length: it closes a code span.
+      let close = -1;
+      for (let j = m; j < raw.length; j++) {
+        if (raw[j] === '\\' && raw[j + 1] === '`') { j++; continue; }
+        if (raw[j] === '`') {
+          let e = j;
+          while (e < raw.length && raw[e] === '`') e++;
+          if (e - j === len) { close = e; break; }
+          j = e - 1;
+        }
+      }
+      if (close !== -1) { k = close - 1; continue; }
+      if (len >= 2) sawLong = true; else sawSingle = true;
       if (sawLong && sawSingle) return true;
+      k = m - 1;
     }
   }
   return false;
