@@ -890,9 +890,15 @@ function parseBlocks(src) {
         consumeIndent(L, 3);
         if (cch(L) === 62) {
           cadv(L);
+          // Expand the whitespace run after '>' from its inner column
+          // (marked's J) BEFORE consuming the one optional space: a
+          // tab's width is measured from the column in the list-
+          // stripped inner text, not the absolute column. Consuming
+          // the tab first measures it from the wrong column and leaves
+          // one space too many (doc-30: 3 instead of 2).
+          expandBqRun(L, itemShift + bqShift);
           // one optional space after '>'; a tab counts as one column
           if (cch(L) === SP || cch(L) === TAB) consumeIndent(L, 1);
-          expandBqRun(L, itemShift + bqShift);
           bqShift += L.col - colBefore;
           depth = d;
         } else {
@@ -1212,16 +1218,15 @@ function parseBlocks(src) {
       consumeIndent(L, 3);
       if (cch(L) === 62) {
         cadv(L);
-        // one optional space after '>'; a tab counts as one column
-        if (cch(L) === SP || cch(L) === TAB) consumeIndent(L, 1);
         // expand the whitespace run after the marker from its inner
-        // column (marked's J); the shift is the list-item indents
-        // stripped from this line (outer blockquotes are already
-        // matched and their markers are in L.col, so a tab after a
-        // nested '>' opening on this line is approximated)
+        // column (marked's J) before consuming the one optional space
+        // (see matchContainers: a tab measured from the absolute
+        // column leaves one space too many)
         let ishift = 0;
         for (let d = 1; d < S.stack.length; d++) if (S.stack[d].t === 'item') ishift += S.stack[d].contentIndent;
         expandBqRun(L, ishift);
+        // one optional space after '>'; a tab counts as one column
+        if (cch(L) === SP || cch(L) === TAB) consumeIndent(L, 1);
         closeLeaf();
         const bq = addChild({ t: 'bq', children: [] });
         S.stack.push(bq);
