@@ -1991,6 +1991,23 @@ function emailDomainEnd(s, atPos, runEnd) {
   }
   return best;
 }
+// marked's GFM url backpedal (rules.inline._backpedal): the url regex
+// first grabs to the next whitespace, then this is applied until
+// stable. It keeps balanced (...) pairs and text runs, and drops a
+// trailing run of ?!.,:;*_'"~) only when it reaches the end — a '('
+// with no closer ends the match there, and a non-punctuation char
+// after the run (e.g. ']') saves the punctuation before it. So
+// `https://a.io)](https://b.io` backpedals to `https://a.io)]`.
+const GFM_BACKPEDAL_RE = /(?:[^?!.,:;*_'"~()&]+|\([^)]*\)|&(?![a-zA-Z0-9]+;$)|[?!.,:;*_'"~)]+(?!$))+/;
+function gfmBackpedal(text) {
+  let prev;
+  do {
+    prev = text;
+    text = GFM_BACKPEDAL_RE.exec(text)?.[0] ?? '';
+  } while (prev !== text);
+  return text;
+}
+
 function gfmUrlEnd(s, i) {
   const n = s.length;
   let k = i;
@@ -1999,36 +2016,7 @@ function gfmUrlEnd(s, i) {
     if (isWSCode(c) || c === 60) break;
     k++;
   }
-  return gfmTrimEnd(s, i, k);
-}
-
-// Trim trailing punctuation from s[i..end): strip a trailing &...; entity
-// whole, then ; : ? ! , . ~ * _ and unbalanced ')'.
-function gfmTrimEnd(s, i, end) {
-  while (end > i) {
-    const c = s.charCodeAt(end - 1);
-    if (c === 59) {
-      // trailing &...; entity? strip the whole entity
-      let j = end - 2;
-      while (j >= i && (isAlnum(s.charCodeAt(j)) || s.charCodeAt(j) === 35)) j--;
-      if (j >= i && s.charCodeAt(j) === 38) { end = j; continue; }
-      end--; continue;
-    }
-    if (c === 58 || c === 63 || c === 33 || c === 44 || c === 46 || c === 126 || c === 42 || c === 95) { end--; continue; }
-    if (c === 41) {
-      // keep ')' only when balanced within s[i..end)
-      let depth = 0;
-      for (let j = i; j < end; j++) {
-        const d = s.charCodeAt(j);
-        if (d === 40) depth++;
-        else if (d === 41) depth--;
-      }
-      if (depth < 0) { end--; continue; }
-      break;
-    }
-    break;
-  }
-  return end;
+  return i + gfmBackpedal(s.slice(i, k)).length;
 }
 
 // Does s[i..end) contain a domain with a dot followed by 2+ letters?
