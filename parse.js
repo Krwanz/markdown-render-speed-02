@@ -2452,7 +2452,9 @@ function renderItem(item, refs, tight) {
         continue;
       }
     }
-    if (tight && i === 0 && nd.t === 'para') {
+    // In a tight list every paragraph renders bare (no <p> tags), not
+    // just the first one: a paragraph after a heading is bare too.
+    if (tight && nd.t === 'para') {
       let text = nd.lines.join('\n');
       if (nd.lastStripState && next && !next.blankBefore) text += '\n';
       out += inlineToHtml(text, refs);
