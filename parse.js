@@ -1333,7 +1333,15 @@ function parseBlocks(src) {
     if (S.leaf && S.leaf.t === 'code' && S.leaf.fenced) {
       const m = matchContainers(L);
       if (m.failedAt >= 0) {
-        let ends = S.stack[m.failedAt].t === 'bq';
+        // The fence's parent container is the deepest stack node. If an
+        // OUTER container failed, the parent itself is unreachable, so
+        // the line cannot be fence content at all: the fence ends
+        // (e.g. a line with no `>` below a blockquote that sits inside
+        // a list item whose indent the line also misses — doc-36).
+        // Only when the parent container itself failed does the lazy
+        // continuation question arise (item parent: marked's list
+        // capture may still keep the line; bq parent: it always ends).
+        let ends = m.failedAt < S.stack.length - 1 || S.stack[m.failedAt].t === 'bq';
         if (!ends) {
           // list-item indent failure: the line stays content unless
           // the fence's previous line was blank, a fence/heading/
